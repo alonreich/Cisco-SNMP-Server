@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import sys
 
-os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 sys.dont_write_bytecode = True
 
 try:
@@ -93,8 +93,10 @@ INTERFACE_DESCRIPTION_OIDS: tuple[tuple[str, str], ...] = (
 )
 
 OID_IF_HIGHSPEED = "1.3.6.1.2.1.31.1.1.1.15"
+OID_IF_OPER_STATUS = "1.3.6.1.2.1.2.2.1.8"  # 1=up, 2=down, 3=testing, etc.
 OID_IF_HC_IN_OCTETS = "1.3.6.1.2.1.31.1.1.1.6"
 OID_IF_HC_OUT_OCTETS = "1.3.6.1.2.1.31.1.1.1.10"
+OID_CISCO_CPU = "1.3.6.1.4.1.9.9.109.1.1.1.1.3"  # cpmCPUTotal5minRev (generic Cisco CPU)
 
 SNMP_TIMEOUT = 5
 SNMP_RETRIES = 2
@@ -104,21 +106,16 @@ SNMP_RETRIES = 2
 # Structure:
 # {
 #     "switch_ip": {
-#         "ifIndex": {
-#             "ifDescr": str,   # SNMP interface name
-#             "ifAlias": str,   # SNMP admin description (Cisco "description" on interface)
-#             "ifHighSpeed": int,
-#             "prev_timestamp": float,
-#             "prev_in_octets": int,
-#             "prev_out_octets": int,
-#             "current_bps": float,
-#             "current_util_pct": float,
+#         "cpu_usage": int,
+#         "interfaces": {
+#             "ifIndex": {
+#                 ...
+#             }
 #         }
 #     }
 # }
-# ---------------------------------------------------------------------------
 
-GLOBAL_STATE: dict[str, dict[str, dict[str, Any]]] = {}
+GLOBAL_STATE: dict[str, dict[str, Any]] = {}
 _state_lock: asyncio.Lock | None = None
 
 # WebSocket connection registry
@@ -537,42 +534,116 @@ async def _walk_interface_descriptions(
     return merged
 
 
+def _get_capability_speed(if_descr: str) -> int:
+    """Infer the maximum speed capability of an interface from its description (Cisco nomenclature)."""
+    d = if_descr.lower()
+    # 100G
+    if "hundredgigabit" in d or "hu" in d:
+        return 100000
+    # 40G
+    if "fortygigabit" in d or "fo" in d:
+        return 40000
+    # 25G
+    if "twentyfivegig" in d or "twe" in d:
+        return 25000
+    # 10G
+    if "tengigabit" in d or "te" in d:
+        return 10000
+    # 5G/2.5G (Multigigabit)
+    if "fivegigabit" in d:
+        return 5000
+    if "twogigabit" in d:
+        return 2000
+    # 1G
+    if "gigabit" in d or "gi" in d:
+        return 1000
+    # 100M
+    if "fastethernet" in d or "fa" in d:
+        return 100
+    # 10M
+    if "ethernet" in d or "et" in d:
+        return 10
+    return 0
+
+
+def _shorten_if_name(name: str) -> str:
+    """Abbreviate long Cisco interface names (e.g., GigabitEthernet1/0/1 -> Gi1/0/1)."""
+    # Order matters: check longest names first to avoid partial replacements
+    mapping = (
+        ("HundredGigabitEthernet", "Hu"),
+        ("FortyGigabitEthernet", "Fo"),
+        ("TwentyFiveGigE", "Twe"),
+        ("TenGigabitEthernet", "Te"),
+        ("GigabitEthernet", "Gi"),
+        ("FastEthernet", "Fa"),
+        ("Ethernet", "Et"),
+        ("Port-channel", "Po"),
+        ("Vlan", "Vl"),
+        ("Loopback", "Lo"),
+        ("Management", "Ma"),
+        ("AppGigabitEthernet", "AppGi"),
+        ("VirtualPortGroup", "VPG"),
+        ("Tunnel", "Tu"),
+    )
+    for long_name, short_name in mapping:
+        if name.lower().startswith(long_name.lower()):
+            # Use original case for the suffix (the numbers/slots)
+            return short_name + name[len(long_name) :]
+    return name
+
+
 async def _poll_switch(switch_ip: str, community: str) -> None:
     """Poll all required OIDs for a single switch and update GLOBAL_STATE."""
-    descr_map, desc_map, speed_map, in_map, out_map = await asyncio.gather(
+    descr_map, desc_map, speed_map, oper_map, in_map, out_map, cpu_map = await asyncio.gather(
         _snmp_bulk_walk(switch_ip, OID_IF_DESCR, community),
         _walk_interface_descriptions(switch_ip, community),
         _snmp_bulk_walk(switch_ip, OID_IF_HIGHSPEED, community),
+        _snmp_bulk_walk(switch_ip, OID_IF_OPER_STATUS, community),
         _snmp_bulk_walk(switch_ip, OID_IF_HC_IN_OCTETS, community),
         _snmp_bulk_walk(switch_ip, OID_IF_HC_OUT_OCTETS, community),
+        _snmp_bulk_walk(switch_ip, OID_CISCO_CPU, community),
     )
 
-    all_indices = set(descr_map) | set(desc_map) | set(speed_map) | set(in_map) | set(out_map)
+    # Filter for ONLY 'up' interfaces (ifOperStatus == 1)
+    up_indices = {str(idx) for idx, status in oper_map.items() if _safe_int(status) == 1}
     current_ts = time.time()
+
+    # Extract CPU usage (take first value if multiple CPUs, or default to 0)
+    cpu_usage = 0
+    if cpu_map:
+        cpu_usage = _safe_int(list(cpu_map.values())[0])
 
     assert _state_lock is not None
     async with _state_lock:
         if switch_ip not in GLOBAL_STATE:
-            GLOBAL_STATE[switch_ip] = {}
+            GLOBAL_STATE[switch_ip] = {"cpu_usage": 0, "interfaces": {}}
 
-        switch_state = {str(k): v for k, v in GLOBAL_STATE[switch_ip].items()}
-        GLOBAL_STATE[switch_ip] = switch_state
+        switch_data = GLOBAL_STATE[switch_ip]
+        switch_data["cpu_usage"] = cpu_usage
+        switch_state = switch_data["interfaces"]
         seen_indices: set[str] = set()
 
-        for ifindex in all_indices:
-            ifindex = str(ifindex)
+        for ifindex in up_indices:
             seen_indices.add(ifindex)
-            if_descr = _safe_str(descr_map.get(ifindex, ""))
+            raw_descr = _safe_str(descr_map.get(ifindex, ""))
+            if_descr = _shorten_if_name(raw_descr)
             if_alias = desc_map.get(ifindex, "")
             if_high_speed = _safe_int(speed_map.get(ifindex, 0))
             current_in = _safe_int(in_map.get(ifindex, 0))
             current_out = _safe_int(out_map.get(ifindex, 0))
+
+            max_cap = _get_capability_speed(if_descr)
+            is_degraded = False
+            if max_cap > 0 and if_high_speed > 0 and if_high_speed < max_cap:
+                is_degraded = True
 
             if ifindex not in switch_state:
                 switch_state[ifindex] = {
                     "ifDescr": if_descr,
                     "ifAlias": if_alias,
                     "ifHighSpeed": if_high_speed,
+                    "max_speed": max_cap,
+                    "is_degraded": is_degraded,
                     "prev_timestamp": current_ts,
                     "prev_in_octets": current_in,
                     "prev_out_octets": current_out,
@@ -585,6 +656,8 @@ async def _poll_switch(switch_ip: str, community: str) -> None:
             iface["ifDescr"] = if_descr
             iface["ifAlias"] = if_alias
             iface["ifHighSpeed"] = if_high_speed
+            iface["max_speed"] = max_cap
+            iface["is_degraded"] = is_degraded
 
             prev_ts = iface["prev_timestamp"]
             prev_in = iface["prev_in_octets"]
@@ -641,18 +714,28 @@ async def _build_leaderboard_payload() -> list[dict[str, Any]]:
 
     assert _state_lock is not None
     async with _state_lock:
-        for switch_ip, interfaces in GLOBAL_STATE.items():
-            for ifindex, data in interfaces.items():
+        for switch_ip, data in GLOBAL_STATE.items():
+            interfaces = data.get("interfaces", {})
+            for ifindex, if_data in interfaces.items():
+                raw_bps = float(if_data.get("current_bps", 0.0))
+                # If it rounds to 0 or is effectively 0, skip it
+                if raw_bps < 0.5:
+                    continue
+
+                current_bps = round(raw_bps)
+
                 ifindex_key = str(ifindex)
                 row_key = f"{switch_ip}|{ifindex_key}"
                 unique_rows[row_key] = {
                     "switch_ip": switch_ip,
                     "ifIndex": ifindex_key,
-                    "ifDescr": data.get("ifDescr", ""),
-                    "ifAlias": data.get("ifAlias", ""),
-                    "ifHighSpeed": round(int(data["ifHighSpeed"])),
-                    "current_bps": round(float(data["current_bps"])),
-                    "current_util_pct": round(float(data["current_util_pct"])),
+                    "ifDescr": if_data.get("ifDescr", ""),
+                    "ifAlias": if_data.get("ifAlias", ""),
+                    "ifHighSpeed": round(int(if_data["ifHighSpeed"])),
+                    "max_speed": round(int(if_data.get("max_speed", 0))),
+                    "is_degraded": bool(if_data.get("is_degraded", False)),
+                    "current_bps": current_bps,
+                    "current_util_pct": round(float(if_data["current_util_pct"])),
                 }
 
     rows = list(unique_rows.values())
@@ -660,13 +743,33 @@ async def _build_leaderboard_payload() -> list[dict[str, Any]]:
     return rows[:DISPLAY_LIMIT]
 
 
+async def _build_cpu_payload() -> list[dict[str, Any]]:
+    """Flatten GLOBAL_STATE to get CPU usage per switch."""
+    rows: list[dict[str, Any]] = []
+
+    assert _state_lock is not None
+    async with _state_lock:
+        for switch_ip, data in GLOBAL_STATE.items():
+            rows.append(
+                {
+                    "switch_ip": switch_ip,
+                    "cpu_usage": int(data.get("cpu_usage", 0)),
+                }
+            )
+
+    rows.sort(key=lambda r: r["cpu_usage"], reverse=True)
+    return rows
+
+
 async def _broadcast_leaderboard() -> None:
-    """Send sorted leaderboard JSON to all connected WebSocket clients."""
-    payload = await _build_leaderboard_payload()
+    """Send sorted leaderboard and CPU data JSON to all connected WebSocket clients."""
+    lb_payload = await _build_leaderboard_payload()
+    cpu_payload = await _build_cpu_payload()
     message = json.dumps(
         {
-            "type": "leaderboard",
-            "data": payload,
+            "type": "update",
+            "leaderboard": lb_payload,
+            "cpu_data": cpu_payload,
             "monitored_switches": list(MONITORED_SWITCHES),
             "display_limit": DISPLAY_LIMIT,
             "timestamp": time.time(),
@@ -767,6 +870,17 @@ app = FastAPI(
 )
 
 
+@app.get("/cpu", response_class=HTMLResponse)
+async def cpu_dashboard(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "cpu.html",
+        {
+            "monitored_switches": MONITORED_SWITCHES,
+        },
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
@@ -850,12 +964,14 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         _ws_clients.add(ws)
 
     try:
-        initial = await _build_leaderboard_payload()
+        initial_lb = await _build_leaderboard_payload()
+        initial_cpu = await _build_cpu_payload()
         await ws.send_text(
             json.dumps(
                 {
-                    "type": "leaderboard",
-                    "data": initial,
+                    "type": "update",
+                    "leaderboard": initial_lb,
+                    "cpu_data": initial_cpu,
                     "monitored_switches": list(MONITORED_SWITCHES),
                     "display_limit": DISPLAY_LIMIT,
                     "timestamp": time.time(),
