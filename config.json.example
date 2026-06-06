@@ -1,0 +1,10 @@
+{
+  "display_limit": 10,
+  "monitored_switches": [
+    {
+      "ip": "10.0.0.1",
+      "community": "your-readonly-community",
+      "polling_interval": 30
+    }
+  ]
+}

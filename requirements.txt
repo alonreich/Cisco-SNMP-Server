@@ -1,0 +1,7 @@
+# Install ONLY via:  setup.bat   (uses .\venv — do not pip install into global Python)
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+jinja2>=3.1.0
+# SNMP (one of — chosen by Python version)
+pysnmp-lextudio>=6.0.0; python_version < "3.14"
+pysnmp>=7.1.0; python_version >= "3.14"

@@ -1,0 +1,36 @@
+# Python bytecode / caches — never commit (see cache_guard.py)
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.cache/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Tool / build caches (project tree only)
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+*.cache
+.coverage
+htmlcov/
+.tox/
+.nox/
+htmlcov/
+
+# Virtual environment (local only)
+venv/
+.venv/
+env/
+
+# Runtime settings (SNMP communities — do not commit)
+config.json
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini

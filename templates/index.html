@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Bandwidth Monitor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        surface: { 900: '#0f1419', 800: '#1a2332', 700: '#243044', 600: '#2d3a50' },
+                        accent: { DEFAULT: '#3b82f6', dim: '#2563eb', glow: '#60a5fa' },
+                        gridline: '#e8e8e0',
+                    },
+                    fontFamily: {
+                        mono: ['JetBrains Mono', 'Consolas', 'monospace'],
+                    },
+                },
+            },
+        };
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; }
+        .util-bar { transition: width 0.3s ease, background-color 0.3s ease; }
+        .leaderboard-row { transition: all 0.3s ease; }
+        .leaderboard-row:hover { background-color: rgba(59, 130, 246, 0.08); }
+        .status-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .glow-text { text-shadow: 0 0 20px rgba(96, 165, 250, 0.4); }
+        .leaderboard-table {
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+        .leaderboard-table th,
+        .leaderboard-table td {
+            border: 2px solid #000000;
+        }
+        .descr-cell {
+            white-space: normal;
+            word-break: break-word;
+            max-width: 280px;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body class="h-full bg-surface-900 text-gray-100 antialiased">
+
+    <header class="border-b border-surface-600 bg-surface-800/80 backdrop-blur-sm sticky top-0 z-10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 relative">
+            <div class="text-center">
+                <div class="flex items-center justify-center gap-3 mb-1">
+                    <div class="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center">
+                        <svg class="w-6 h-6 text-accent-glow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                  d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                        </svg>
+                    </div>
+                    <h1 class="text-xl font-bold tracking-tight glow-text">Bandwidth Monitor</h1>
+                </div>
+                <p class="text-xs text-gray-400 text-center">Live Mbps per port · sorted by highest utilization</p>
+            </div>
+            <div class="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-3 text-sm">
+                <span id="ws-status" class="flex items-center gap-2 text-gray-400">
+                    <span class="status-dot w-2 h-2 rounded-full bg-yellow-500"></span>
+                    Connecting…
+                </span>
+                <span id="last-update" class="text-gray-500 font-mono text-xs">—</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+        <!-- Interface Leaderboard (first) -->
+        <section class="bg-surface-800 rounded-xl border border-surface-600 shadow-lg overflow-hidden">
+            <div class="px-5 py-4 border-b border-surface-600 flex flex-wrap items-center gap-4">
+                <div class="flex items-center gap-2 shrink-0">
+                    <label for="display-limit" class="text-xs font-medium text-gray-400 whitespace-nowrap">Display Limit</label>
+                    <select id="display-limit" name="display_limit"
+                            class="w-32 bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 text-sm
+                                   text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent
+                                   transition-all duration-200">
+                        <option value="10" {% if display_limit == 10 %}selected{% endif %}>Top 10</option>
+                        <option value="20" {% if display_limit == 20 %}selected{% endif %}>Top 20</option>
+                        <option value="30" {% if display_limit == 30 %}selected{% endif %}>Top 30</option>
+                    </select>
+                </div>
+                <div class="flex-1 text-center min-w-[12rem]">
+                    <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+                        Interface Leaderboard
+                    </h2>
+                    <span id="row-count" class="text-gray-500 text-xs font-normal normal-case">(0 interfaces)</span>
+                </div>
+                <div class="flex items-center gap-4 text-xs text-gray-400 shrink-0">
+                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-green-500"></span> &lt; 30%</span>
+                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-yellow-500"></span> 30–75%</span>
+                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-red-500"></span> &gt; 75%</span>
+                </div>
+            </div>
+
+            <div class="overflow-x-auto p-1">
+                <table class="leaderboard-table w-full text-sm">
+                    <thead>
+                        <tr class="text-xs font-semibold text-gray-400 uppercase tracking-wider bg-surface-700/50">
+                            <th class="px-4 py-3 text-center">Switch IP</th>
+                            <th class="px-4 py-3 text-center">Interface</th>
+                            <th class="px-4 py-3 text-center">Description</th>
+                            <th class="px-4 py-3 text-center">Link Speed (Mbps)</th>
+                            <th class="px-4 py-3 text-center">Current Traffic (Mbps)</th>
+                            <th class="px-4 py-3 text-center min-w-[12rem]">Utilization (%)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="leaderboard-body">
+                        <tr id="empty-row">
+                            <td colspan="6" class="px-5 py-12 text-center text-gray-500">
+                                Waiting for SNMP data… Add a switch in the access list below.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- SNMP Access List (below leaderboard) -->
+        <section class="bg-surface-800 rounded-xl border border-surface-600 p-5 shadow-lg">
+            <div class="text-center mb-4">
+                <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">SNMP Access List</h2>
+                <p class="text-xs text-gray-500 mt-1 text-center">Only listed switches are polled and shown on this dashboard.</p>
+            </div>
+
+            <div class="flex justify-center mb-4">
+                <button type="button" id="btn-add-switch"
+                        class="px-4 py-2 bg-accent hover:bg-accent-dim text-white text-sm font-medium rounded-lg
+                               transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-accent/50 active:scale-95">
+                    + Add Cisco Switch
+                </button>
+            </div>
+
+            <div id="acl-empty" class="text-sm text-gray-500 py-6 text-center border border-dashed border-surface-600 rounded-lg mb-4
+                 {% if monitored_switches %}hidden{% endif %}">
+                No switches in the access list. Click <strong class="text-gray-400">Add Cisco Switch</strong> to allow SNMP polling from a device.
+            </div>
+
+            <div class="overflow-x-auto mb-4 {% if not monitored_switches %}hidden{% endif %}" id="acl-table-wrap">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider border-b border-surface-600">
+                            <th class="px-3 py-2">IPv4 Address</th>
+                            <th class="px-3 py-2">SNMPv2c Community (RO)</th>
+                            <th class="px-3 py-2">Poll Interval</th>
+                            <th class="px-3 py-2 w-24 text-right">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="switch-acl-body" class="divide-y divide-surface-600">
+                        {% for sw in monitored_switches %}
+                        <tr data-ip="{{ sw.ip }}">
+                            <td class="px-3 py-2 font-mono text-accent-glow">{{ sw.ip }}</td>
+                            <td class="px-3 py-2 font-mono text-gray-300">{{ sw.community }}</td>
+                            <td class="px-3 py-2">
+                                <select class="acl-poll-interval w-full min-w-[8rem] bg-surface-700 border border-surface-600 rounded-lg px-2 py-1.5 text-xs text-gray-100"
+                                        data-ip="{{ sw.ip }}" aria-label="Poll interval for {{ sw.ip }}">
+                                    <option value="5"   {% if sw.polling_interval == 5 %}selected{% endif %}>5 seconds</option>
+                                    <option value="10"  {% if sw.polling_interval == 10 %}selected{% endif %}>10 seconds</option>
+                                    <option value="30"  {% if sw.polling_interval == 30 or not sw.polling_interval %}selected{% endif %}>30 seconds</option>
+                                    <option value="60"  {% if sw.polling_interval == 60 %}selected{% endif %}>60 seconds</option>
+                                    <option value="300" {% if sw.polling_interval == 300 %}selected{% endif %}>5 minutes</option>
+                                    <option value="3600" {% if sw.polling_interval == 3600 %}selected{% endif %}>1 hour</option>
+                                </select>
+                            </td>
+                            <td class="px-3 py-2 text-right">
+                                <button type="button" class="btn-remove-switch text-xs text-red-400 hover:text-red-300 transition-colors"
+                                        data-ip="{{ sw.ip }}">Remove</button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <p class="text-[10px] text-gray-500 mt-4 text-center border-t border-surface-600 pt-3">
+                Poll interval is per switch. Name, speed &amp; traffic refresh each poll cycle.
+            </p>
+
+            <p id="acl-feedback" class="mt-3 text-xs text-center hidden transition-all duration-300"></p>
+        </section>
+
+        <!-- Add Switch Modal -->
+        <div id="add-switch-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <div class="bg-surface-800 border border-surface-600 rounded-xl shadow-2xl w-full max-w-md p-6" role="dialog" aria-labelledby="modal-title">
+                <h3 id="modal-title" class="text-lg font-semibold text-gray-100 mb-1 text-center">Add Cisco Switch</h3>
+                <p class="text-xs text-gray-400 mb-5 text-center">Grant read-only SNMPv2c access for this IPv4 address. Traffic from other devices is ignored.</p>
+                <form id="add-switch-form" class="space-y-4">
+                    <div>
+                        <label for="new-switch-ip" class="block text-xs font-medium text-gray-400 mb-2">IPv4 Address</label>
+                        <input type="text" id="new-switch-ip" name="ip" required
+                               placeholder="10.0.0.1" autocomplete="off"
+                               class="w-full bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 text-sm font-mono text-gray-100
+                                      placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent">
+                    </div>
+                    <div>
+                        <label for="new-switch-community" class="block text-xs font-medium text-gray-400 mb-2">SNMPv2c Community (read-only)</label>
+                        <input type="text" id="new-switch-community" name="community" required
+                               placeholder="public" autocomplete="off"
+                               class="w-full bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 text-sm font-mono text-gray-100
+                                      placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent">
+                    </div>
+                    <div>
+                        <label for="new-switch-polling-interval" class="block text-xs font-medium text-gray-400 mb-2">Poll Interval</label>
+                        <select id="new-switch-polling-interval" name="polling_interval" required
+                                class="w-full bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 text-sm text-gray-100
+                                       focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent">
+                            <option value="5">5 seconds</option>
+                            <option value="10">10 seconds</option>
+                            <option value="30" selected>30 seconds</option>
+                            <option value="60">60 seconds</option>
+                            <option value="300">5 minutes</option>
+                            <option value="3600">1 hour</option>
+                        </select>
+                    </div>
+                    <p id="modal-error" class="text-xs text-red-400 hidden text-center"></p>
+                    <div class="flex justify-end gap-3 pt-2">
+                        <button type="button" id="btn-modal-cancel"
+                                class="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors">Cancel</button>
+                        <button type="submit"
+                                class="px-4 py-2 bg-accent hover:bg-accent-dim text-white text-sm font-medium rounded-lg
+                                       transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-accent/50">
+                            Add to Access List
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </main>
+
+    <script>
+    (() => {
+        'use strict';
+
+        const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+
+        let ws = null;
+        let reconnectTimer = null;
+        let leaderboardData = [];
+        let switchAcl = {{ monitored_switches | tojson }};
+
+        const wsStatusEl         = document.getElementById('ws-status');
+        const lastUpdateEl       = document.getElementById('last-update');
+        const tbody              = document.getElementById('leaderboard-body');
+        const rowCountEl         = document.getElementById('row-count');
+        const displaySelect      = document.getElementById('display-limit');
+        const newSwitchPolling   = document.getElementById('new-switch-polling-interval');
+
+        const POLL_INTERVAL_OPTS = [
+            { value: 5, label: '5 seconds' },
+            { value: 10, label: '10 seconds' },
+            { value: 30, label: '30 seconds' },
+            { value: 60, label: '60 seconds' },
+            { value: 300, label: '5 minutes' },
+            { value: 3600, label: '1 hour' },
+        ];
+        const aclBody            = document.getElementById('switch-acl-body');
+        const aclEmpty           = document.getElementById('acl-empty');
+        const aclTableWrap       = document.getElementById('acl-table-wrap');
+        const aclFeedback        = document.getElementById('acl-feedback');
+        const addSwitchModal     = document.getElementById('add-switch-modal');
+        const addSwitchForm      = document.getElementById('add-switch-form');
+        const modalError         = document.getElementById('modal-error');
+        const newSwitchIp        = document.getElementById('new-switch-ip');
+        const newSwitchCommunity = document.getElementById('new-switch-community');
+
+        function setWsStatus(state, label) {
+            const colors = { connected: 'bg-green-500', connecting: 'bg-yellow-500', disconnected: 'bg-red-500' };
+            wsStatusEl.innerHTML =
+                `<span class="status-dot w-2 h-2 rounded-full ${colors[state] || 'bg-gray-500'}"></span>${label}`;
+        }
+
+        function utilColor(pct) {
+            if (pct > 75) return 'bg-red-500';
+            if (pct >= 30) return 'bg-yellow-500';
+            return 'bg-green-500';
+        }
+
+        function utilTextColor(pct) {
+            if (pct > 75) return 'text-red-400';
+            if (pct >= 30) return 'text-yellow-400';
+            return 'text-green-400';
+        }
+
+        function escapeHtml(text) {
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function formatWhole(val) {
+            return String(Math.round(Number(val) || 0));
+        }
+
+        function pollIntervalSelectHtml(selectedValue, extraClass = '') {
+            const selected = Number(selectedValue) || 30;
+            const opts = POLL_INTERVAL_OPTS.map(
+                (o) => `<option value="${o.value}"${o.value === selected ? ' selected' : ''}>${o.label}</option>`
+            ).join('');
+            return `<select class="acl-poll-interval ${extraClass} bg-surface-700 border border-surface-600 rounded-lg px-2 py-1.5 text-xs text-gray-100 min-w-[8rem]">${opts}</select>`;
+        }
+
+        function bindAclPollIntervalHandlers() {
+            aclBody.querySelectorAll('.acl-poll-interval').forEach((sel) => {
+                sel.addEventListener('change', () => {
+                    const ip = sel.dataset.ip || sel.closest('tr')?.dataset.ip;
+                    if (ip) updateSwitchPollingInterval(ip, parseInt(sel.value, 10));
+                });
+            });
+        }
+
+        function buildRowKey(row) {
+            return `${row.switch_ip}|${String(row.ifIndex)}`;
+        }
+
+        function dedupeRows(data) {
+            const map = new Map();
+            for (const row of data) {
+                const key = buildRowKey(row);
+                const existing = map.get(key);
+                if (!existing || Number(row.current_util_pct) >= Number(existing.current_util_pct)) {
+                    map.set(key, row);
+                }
+            }
+            return [...map.values()];
+        }
+
+        function renderLeaderboard(data) {
+            leaderboardData = dedupeRows(data).sort(
+                (a, b) => Number(b.current_util_pct) - Number(a.current_util_pct)
+            );
+
+            rowCountEl.textContent = `(${leaderboardData.length} interface${leaderboardData.length !== 1 ? 's' : ''})`;
+
+            if (leaderboardData.length === 0) {
+                tbody.innerHTML = `
+                    <tr id="empty-row">
+                        <td colspan="6" class="px-5 py-12 text-center text-gray-500">
+                            No interface data yet. Ensure switches are reachable via SNMPv2c.
+                        </td>
+                    </tr>`;
+                return;
+            }
+
+            const existingRows = {};
+            tbody.querySelectorAll('tr[data-key]').forEach(tr => {
+                existingRows[tr.dataset.key] = tr;
+            });
+
+            const fragment = document.createDocumentFragment();
+
+            leaderboardData.forEach((row) => {
+                const key = buildRowKey(row);
+                let tr = existingRows[key];
+
+                if (tr) {
+                    tr.className = 'leaderboard-row transition-all duration-300';
+                    updateRowCells(tr, row);
+                } else {
+                    tr = document.createElement('tr');
+                    tr.dataset.key = key;
+                    tr.className = 'leaderboard-row transition-all duration-300';
+                    tr.innerHTML = rowTemplate(row);
+                }
+
+                fragment.appendChild(tr);
+            });
+
+            tbody.innerHTML = '';
+            tbody.appendChild(fragment);
+        }
+
+        function rowTemplate(row) {
+            const barColor = utilColor(row.current_util_pct);
+            const textColor = utilTextColor(row.current_util_pct);
+            const barWidth = Math.min(Number(row.current_util_pct) || 0, 100);
+            const ifName = escapeHtml(row.ifDescr || '');
+            const ifDesc = escapeHtml(row.ifAlias || '');
+
+            return `
+                <td class="px-4 py-3 font-mono text-accent-glow text-center transition-all duration-300">${escapeHtml(row.switch_ip)}</td>
+                <td class="px-4 py-3 font-mono text-gray-200 text-center transition-all duration-300">${ifName}</td>
+                <td class="px-4 py-3 text-gray-200 text-center descr-cell transition-all duration-300">${ifDesc || '—'}</td>
+                <td class="px-4 py-3 text-center font-mono text-gray-300 transition-all duration-300">${formatWhole(row.ifHighSpeed)}</td>
+                <td class="px-4 py-3 text-center font-mono transition-all duration-300">${formatWhole(row.current_bps)}</td>
+                <td class="px-4 py-3 transition-all duration-300">
+                    <div class="flex items-center gap-3">
+                        <div class="flex-1 h-2 bg-surface-600 rounded-full overflow-hidden">
+                            <div class="util-bar h-full rounded-full ${barColor}" style="width: ${barWidth}%"></div>
+                        </div>
+                        <span class="w-14 text-right font-mono text-sm ${textColor}">${formatWhole(row.current_util_pct)}%</span>
+                    </div>
+                </td>`;
+        }
+
+        function updateRowCells(tr, row) {
+            const cells = tr.children;
+            const barColor = utilColor(row.current_util_pct);
+            const textColor = utilTextColor(row.current_util_pct);
+            const barWidth = Math.min(Number(row.current_util_pct) || 0, 100);
+
+            cells[0].textContent = row.switch_ip;
+            cells[1].textContent = row.ifDescr || '';
+            cells[2].textContent = row.ifAlias || '—';
+            cells[3].textContent = formatWhole(row.ifHighSpeed);
+            cells[4].textContent = formatWhole(row.current_bps);
+
+            const bar = cells[5].querySelector('.util-bar');
+            const pctSpan = cells[5].querySelector('span');
+            bar.className = `util-bar h-full rounded-full ${barColor}`;
+            bar.style.width = `${barWidth}%`;
+            pctSpan.className = `w-14 text-right font-mono text-sm ${textColor}`;
+            pctSpan.textContent = `${formatWhole(row.current_util_pct)}%`;
+        }
+
+        function handleMessage(event) {
+            let msg;
+            try {
+                msg = JSON.parse(event.data);
+            } catch {
+                return;
+            }
+
+            if (msg.type === 'leaderboard') {
+                renderLeaderboard(msg.data || []);
+
+                if (msg.timestamp) {
+                    const d = new Date(msg.timestamp * 1000);
+                    lastUpdateEl.textContent = d.toLocaleTimeString();
+                }
+
+                if (msg.display_limit !== undefined) {
+                    displaySelect.value = String(msg.display_limit);
+                }
+                if (Array.isArray(msg.monitored_switches)) {
+                    switchAcl = msg.monitored_switches;
+                    renderSwitchAcl();
+                }
+            }
+
+            if (msg.type === 'switch_acl') {
+                if (Array.isArray(msg.monitored_switches)) {
+                    switchAcl = msg.monitored_switches;
+                    renderSwitchAcl();
+                }
+                if (msg.display_limit !== undefined) {
+                    displaySelect.value = String(msg.display_limit);
+                }
+                showAclFeedback(msg.message || '', msg.status === 'error');
+            }
+        }
+
+        function renderSwitchAcl() {
+            if (!switchAcl.length) {
+                aclEmpty.classList.remove('hidden');
+                aclTableWrap.classList.add('hidden');
+                aclBody.innerHTML = '';
+                return;
+            }
+            aclEmpty.classList.add('hidden');
+            aclTableWrap.classList.remove('hidden');
+            aclBody.innerHTML = switchAcl.map(sw => {
+                const interval = sw.polling_interval != null ? sw.polling_interval : 30;
+                return `
+                <tr data-ip="${escapeHtml(sw.ip)}">
+                    <td class="px-3 py-2 font-mono text-accent-glow">${escapeHtml(sw.ip)}</td>
+                    <td class="px-3 py-2 font-mono text-gray-300">${escapeHtml(sw.community)}</td>
+                    <td class="px-3 py-2">${pollIntervalSelectHtml(interval, 'w-full')}</td>
+                    <td class="px-3 py-2 text-right">
+                        <button type="button" class="btn-remove-switch text-xs text-red-400 hover:text-red-300 transition-colors"
+                                data-ip="${escapeHtml(sw.ip)}">Remove</button>
+                    </td>
+                </tr>`;
+            }).join('');
+            aclBody.querySelectorAll('tr[data-ip]').forEach(tr => {
+                const ip = tr.dataset.ip;
+                const sel = tr.querySelector('.acl-poll-interval');
+                if (sel && ip) sel.dataset.ip = ip;
+            });
+            aclBody.querySelectorAll('.btn-remove-switch').forEach(btn => {
+                btn.addEventListener('click', () => removeSwitch(btn.dataset.ip));
+            });
+            bindAclPollIntervalHandlers();
+        }
+
+        function showAclFeedback(message, isError = false) {
+            if (!message) {
+                aclFeedback.classList.add('hidden');
+                return;
+            }
+            aclFeedback.textContent = message;
+            aclFeedback.className = `mt-3 text-xs text-center transition-all duration-300 ${isError ? 'text-red-400' : 'text-green-400'}`;
+            aclFeedback.classList.remove('hidden');
+            setTimeout(() => aclFeedback.classList.add('hidden'), 3500);
+        }
+
+        function openAddModal() {
+            modalError.classList.add('hidden');
+            addSwitchForm.reset();
+            newSwitchPolling.value = '30';
+            addSwitchModal.classList.remove('hidden');
+            addSwitchModal.classList.add('flex');
+            newSwitchIp.focus();
+        }
+
+        function closeAddModal() {
+            addSwitchModal.classList.add('hidden');
+            addSwitchModal.classList.remove('flex');
+        }
+
+        async function updateSwitchPollingInterval(ip, pollingInterval) {
+            const payload = { ip, polling_interval: pollingInterval };
+            sendWs({ type: 'set_switch_polling_interval', ...payload });
+
+            try {
+                const res = await fetch('/api/switches/polling-interval', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await res.json();
+                if (Array.isArray(data.monitored_switches)) {
+                    switchAcl = data.monitored_switches;
+                    renderSwitchAcl();
+                }
+                showAclFeedback(data.message || '', data.status === 'error');
+            } catch {
+                showAclFeedback('Failed to update poll interval.', true);
+            }
+        }
+
+        async function addSwitch(ip, community, pollingInterval) {
+            const payload = {
+                ip: ip.trim(),
+                community: community.trim(),
+                polling_interval: pollingInterval,
+            };
+            sendWs({ type: 'add_switch', ...payload });
+
+            try {
+                const res = await fetch('/api/switches/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    closeAddModal();
+                }
+                if (Array.isArray(data.monitored_switches)) {
+                    switchAcl = data.monitored_switches;
+                    renderSwitchAcl();
+                }
+                showAclFeedback(data.message || '', data.status === 'error');
+            } catch {
+                showAclFeedback('Failed to add switch.', true);
+            }
+        }
+
+        async function removeSwitch(ip) {
+            if (!confirm(`Remove ${ip} from the SNMP access list?`)) return;
+
+            sendWs({ type: 'remove_switch', ip });
+
+            try {
+                const res = await fetch('/api/switches/remove', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ip }),
+                });
+                const data = await res.json();
+                if (Array.isArray(data.monitored_switches)) {
+                    switchAcl = data.monitored_switches;
+                    renderSwitchAcl();
+                }
+                showAclFeedback(data.message || '', data.status === 'error');
+            } catch {
+                showAclFeedback('Failed to remove switch.', true);
+            }
+        }
+
+        function connectWebSocket() {
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+                return;
+            }
+
+            setWsStatus('connecting', 'Connecting…');
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                setWsStatus('connected', 'Live');
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
+            };
+
+            ws.onmessage = handleMessage;
+
+            ws.onclose = () => {
+                setWsStatus('disconnected', 'Disconnected');
+                ws = null;
+                reconnectTimer = setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = () => {
+                ws?.close();
+            };
+        }
+
+        function sendWs(payload) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(payload));
+            }
+        }
+
+        document.getElementById('btn-add-switch').addEventListener('click', openAddModal);
+        document.getElementById('btn-modal-cancel').addEventListener('click', closeAddModal);
+        addSwitchModal.addEventListener('click', (e) => {
+            if (e.target === addSwitchModal) closeAddModal();
+        });
+
+        addSwitchForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            modalError.classList.add('hidden');
+            const ip = newSwitchIp.value.trim();
+            const community = newSwitchCommunity.value.trim();
+            const pollingInterval = parseInt(newSwitchPolling.value, 10);
+            if (!ip || !community) {
+                modalError.textContent = 'IPv4 address and community are required.';
+                modalError.classList.remove('hidden');
+                return;
+            }
+            addSwitch(ip, community, pollingInterval);
+        });
+
+        aclBody.querySelectorAll('.btn-remove-switch').forEach(btn => {
+            btn.addEventListener('click', () => removeSwitch(btn.dataset.ip));
+        });
+
+        displaySelect.addEventListener('change', () => {
+            const value = parseInt(displaySelect.value, 10);
+            sendWs({ type: 'set_display_limit', value });
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ display_limit: value }),
+            }).catch(() => {});
+        });
+
+        bindAclPollIntervalHandlers();
+        renderSwitchAcl();
+        connectWebSocket();
+    })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,89 @@
+================================================================================
+  SNMP-SERVER — PROJECT STRUCTURE & ARCHITECTURE REFERENCE
+================================================================================
+  Stack:          Python 3.11–3.14 | FastAPI | Uvicorn | PySNMP
+  Frontend:       HTML5 + Tailwind CSS (CDN) + Vanilla ES6
+  Platform:       Windows Server / Windows 10+
+  Last updated:   June 2026
+================================================================================
+
+--------------------------------------------------------------------------------
+1. PROJECT GOALS
+--------------------------------------------------------------------------------
+- Deliver a self-contained Real-Time Network Bandwidth Monitoring Dashboard for Cisco switches.
+- Provide a sorted leaderboard of interfaces by utilization percentage (Top 10/20/30).
+- Support per-switch polling intervals (5s to 1h).
+- Ensure configuration persistence via `config.json` (switches, intervals, display limits).
+- Maintain a zero-cache policy (no `__pycache__` or `.pyc` files in source) to ensure reliable deployments.
+- Provide a simple, no-build-step frontend for ease of maintenance.
+
+--------------------------------------------------------------------------------
+2. PROJECT ARCHITECTURE
+--------------------------------------------------------------------------------
+The project follows a single-process, async architecture centered around FastAPI.
+
+- **Entry Point**: `master.py` (launched via `master.bat`) initializes the environment, purges caches, and starts the Uvicorn server.
+- **Backend (FastAPI)**: `main.py` contains the web server, REST API, and WebSocket handler.
+- **Polling Worker**: An async loop in `main.py` that schedules per-switch SNMP polls based on configured intervals.
+- **Data Store**: `GLOBAL_STATE` (in-memory dictionary) stores the latest metrics. Thread-safety is managed via `asyncio.Lock`.
+- **Persistence**: `config.json` stores the list of monitored switches and dashboard settings.
+- **SNMP Engine**: Uses `pysnmp` (v7 for Python 3.14+, lextudio v6 for older) to perform bulk walks for interface descriptions, speeds, and octet counters.
+- **Communication**:
+    - **REST API**: For configuration updates (adding/removing switches, changing limits).
+    - **WebSockets**: Streams real-time leaderboard updates to the browser.
+- **Frontend**: `templates/index.html` uses Tailwind CSS for styling and Vanilla JavaScript for WebSocket communication and DOM updates.
+
+--------------------------------------------------------------------------------
+3. DEPENDENCIES REQUIRED
+--------------------------------------------------------------------------------
+Dependencies are managed via `requirements.txt` and installed into a local `venv` using `setup.bat`.
+
+- **FastAPI**: Web framework.
+- **Uvicorn[standard]**: ASGI server.
+- **Jinja2**: Template engine.
+- **PySNMP**: SNMP protocol implementation.
+    - `pysnmp-lextudio>=6.0.0` (for Python < 3.14)
+    - `pysnmp>=7.1.0` (for Python >= 3.14)
+
+**Setup Command**:
+```cmd
+setup.bat
+```
+
+--------------------------------------------------------------------------------
+4. FEATURE SPECIFICATIONS
+--------------------------------------------------------------------------------
+
+### Feature: Real-Time Interface Leaderboard
+- **Goal**: Show the most utilized network interfaces across all monitored switches.
+- **Logic**: 
+    1. Poll `ifHCInOctets` and `ifHCOutOctets` every interval.
+    2. Calculate delta between polls to determine Mbps.
+    3. Sort all interfaces by `(Current Mbps / Link Speed) * 100`.
+- **UI**: Sorted table with Green/Yellow/Red color-coded utilization bars.
+
+### Feature: Per-Switch SNMP Access List
+- **Goal**: Allow operators to dynamically manage which switches are monitored.
+- **Logic**: 
+    1. Store IP, RO Community, and Polling Interval per switch.
+    2. Save changes immediately to `config.json`.
+    3. Independent polling timers for each switch.
+- **UI**: "SNMP Access List" table below the leaderboard with "Add Switch" modal.
+
+### Feature: Configuration Persistence
+- **Goal**: Retain monitored switches and dashboard settings across server restarts.
+- **Logic**: 
+    1. Load `config.json` on startup.
+    2. Atomic writes to `config.json` using `asyncio.Lock` after any setting change.
+- **Storage**: JSON file in the project root.
+
+### Feature: Zero-Cache Policy
+- **Goal**: Prevent stale bytecode and keep the repository clean.
+- **Logic**: 
+    1. `PYTHONDONTWRITEBYTECODE=1` set in environment and via `python -B`.
+    2. `cache_guard.py` recursively deletes `__pycache__` folders on startup.
+    3. `setup.bat` cleans up after installation.
+
+================================================================================
+  End of project_structure.txt
+================================================================================
