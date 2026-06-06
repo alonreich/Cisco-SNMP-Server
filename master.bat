@@ -44,4 +44,3 @@ for /d /r "%~dp0" %%D in (__pycache__) do (
 )
 
 "%VENV_PY%" -B "%~dp0master.py"
-if errorlevel 1 pause

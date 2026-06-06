@@ -40,7 +40,7 @@ The project uses an async, single-process architecture built with FastAPI.
 
 **Setup Command**:
 ```cmd
-setup.bat
+install.bat
 ```
 
 --------------------------------------------------------------------------------
@@ -55,7 +55,7 @@ setup.bat
 ### Feature: CPU Usage Dashboard
 - **URL**: `/cpu`
 - **Logic**: Polls Cisco `cpmCPUTotal5minRev` OID.
-- **UI**: Optimized thresholds: Green (0-15%), Yellow (16-40%), Red (41-100%).
+- **UI**: Optimized thresholds: Green (0-25%), Yellow (26-65%), Red (66-100%).
 - **Navigation**: Dedicated button with 60px separation from data legend.
 
 ### Feature: Speed Degradation Detection
@@ -68,6 +68,18 @@ setup.bat
 ### Feature: Zero-Cache Policy [MANDATORY BOUNDARY]
 - **Goal**: Absolute suppression of `__pycache__` and `.pyc` files.
 - **Strict Boundary**: AI Agents must never create cache artifacts. `PYTHONDONTWRITEBYTECODE=1` is enforced globally.
+
+### Feature: Background Persistence
+- **Goal**: Ensure the monitor starts automatically after system reboots without manual intervention.
+- **Logic**: 
+    1. `install.bat` (requires **Administrator** privileges) registers a Windows Scheduled Task named `SNMP-Monitor-Backend`.
+    2. Uses a **VBScript Wrapper** (`master_background.vbs`) to execute `master.bat` invisibly.
+    3. Configured for "At System Startup" (`/sc onstart`) as the `SYSTEM` user.
+- **Management**: Can be managed via `taskschd.msc` (Windows Task Scheduler).
+
+### Feature: Robust Lifecycle Management
+- **install.bat**: Automatically kills existing processes, removes old tasks, and handles folder migration/wiping with strict verification logic and high-visibility error handling.
+- **uninstall.bat**: Self-relocating uninstaller that moves to `%TMP%` to ensure the entire `C:\SNMP-Server` directory can be wiped cleanly.
 
 ================================================================================
   End of project_structure.txt
