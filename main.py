@@ -202,74 +202,83 @@ async def _walk_interface_descriptions(ip: str, comm: str) -> dict[str, str]:
     return merged
 
 async def _poll_switch(switch_ip: str, community: str) -> None:
-    descr_map, alias_map, speed_map, oper_map, admin_map, in_map, out_map, cpu_map = await asyncio.gather(
-        _snmp_bulk_walk(switch_ip, OID_IF_DESCR, community),
-        _walk_interface_descriptions(switch_ip, community),
-        _snmp_bulk_walk(switch_ip, OID_IF_HIGHSPEED, community),
-        _snmp_bulk_walk(switch_ip, OID_IF_OPER_STATUS, community),
-        _snmp_bulk_walk(switch_ip, OID_IF_ADMIN_STATUS, community),
-        _snmp_bulk_walk(switch_ip, OID_IF_HC_IN_OCTETS, community),
-        _snmp_bulk_walk(switch_ip, OID_IF_HC_OUT_OCTETS, community),
-        _snmp_bulk_walk(switch_ip, OID_CISCO_CPU, community),
-    )
-    
-    all_indices = set(descr_map) | set(alias_map) | set(speed_map) | set(oper_map) | set(in_map) | set(out_map)
-    current_ts = time.time()
-    cpu_usage = _safe_int(list(cpu_map.values())[0]) if cpu_map else 0
-
-    async with _state_lock:
-        if switch_ip not in GLOBAL_STATE: GLOBAL_STATE[switch_ip] = {"cpu_usage": 0, "interfaces": {}}
-        switch_data = GLOBAL_STATE[switch_ip]
-        switch_data["cpu_usage"] = cpu_usage
-        ifaces = switch_data["interfaces"]
+    try:
+        descr_map, alias_map, speed_map, oper_map, admin_map, in_map, out_map, cpu_map = await asyncio.gather(
+            _snmp_bulk_walk(switch_ip, OID_IF_DESCR, community),
+            _walk_interface_descriptions(switch_ip, community),
+            _snmp_bulk_walk(switch_ip, OID_IF_HIGHSPEED, community),
+            _snmp_bulk_walk(switch_ip, OID_IF_OPER_STATUS, community),
+            _snmp_bulk_walk(switch_ip, OID_IF_ADMIN_STATUS, community),
+            _snmp_bulk_walk(switch_ip, OID_IF_HC_IN_OCTETS, community),
+            _snmp_bulk_walk(switch_ip, OID_IF_HC_OUT_OCTETS, community),
+            _snmp_bulk_walk(switch_ip, OID_CISCO_CPU, community),
+        )
         
-        seen = set()
-        for idx in all_indices:
-            idx_s = str(idx)
-            seen.add(idx_s)
-            raw_descr = _safe_str(descr_map.get(idx_s, ""))
+        all_indices = set(descr_map) | set(alias_map) | set(speed_map) | set(oper_map) | set(in_map) | set(out_map)
+        current_ts = time.time()
+        cpu_usage = _safe_int(list(cpu_map.values())[0]) if cpu_map else 0
+        is_reachable = len(all_indices) > 0
+
+        async with _state_lock:
+            if switch_ip not in GLOBAL_STATE: GLOBAL_STATE[switch_ip] = {"cpu_usage": 0, "interfaces": {}}
+            switch_data = GLOBAL_STATE[switch_ip]
+            switch_data["cpu_usage"] = cpu_usage
+            switch_data["is_reachable"] = is_reachable
+            ifaces = switch_data["interfaces"]
             
-            if idx_s not in ifaces:
-                ifaces[idx_s] = {
-                    "prev_timestamp": current_ts,
-                    "prev_in_octets": _safe_int(in_map.get(idx_s)),
-                    "prev_out_octets": _safe_int(out_map.get(idx_s)),
-                    "current_bps": 0.0,
-                    "current_util_pct": 0.0
-                }
-            
-            iface = ifaces[idx_s]
-            iface["ifDescr"] = _shorten_if_name(raw_descr)
-            iface["ifAlias"] = _safe_str(alias_map.get(idx_s))
-            iface["ifHighSpeed"] = _safe_int(speed_map.get(idx_s))
-            iface["oper_status"] = _safe_int(oper_map.get(idx_s))
-            iface["admin_status"] = _safe_int(admin_map.get(idx_s))
-            iface["max_speed"] = _get_capability_speed(raw_descr)
-            
-            # Mismatch logic: Only flag if port is UP (oper_status=1)
-            is_degraded = False
-            if iface["oper_status"] == 1 and iface["max_speed"] > 0:
-                if iface["ifHighSpeed"] < iface["max_speed"]:
-                    is_degraded = True
-                    logger.info("SPEED MISMATCH: %s %s (%s) synced at %d, but cap %d", 
-                                switch_ip, idx_s, raw_descr, iface["ifHighSpeed"], iface["max_speed"])
-            
-            iface["is_degraded"] = is_degraded
-            
-            d_t = current_ts - iface["prev_timestamp"]
-            if d_t > 0:
-                d_in = _safe_int(in_map.get(idx_s)) - iface["prev_in_octets"]
-                d_out = _safe_int(out_map.get(idx_s)) - iface["prev_out_octets"]
-                if d_in >= 0 and d_out >= 0:
-                    iface["current_bps"] = ((d_in + d_out) * 8) / (d_t * 1_000_000)
-                    iface["current_util_pct"] = (iface["current_bps"] / iface["ifHighSpeed"] * 100) if iface["ifHighSpeed"] > 0 else 0
-            
-            iface["prev_timestamp"] = current_ts
-            iface["prev_in_octets"] = _safe_int(in_map.get(idx_s))
-            iface["prev_out_octets"] = _safe_int(out_map.get(idx_s))
-            
-        for stale in [k for k in ifaces if k not in seen]:
-            del ifaces[stale]
+            seen = set()
+            for idx in all_indices:
+                idx_s = str(idx)
+                seen.add(idx_s)
+                raw_descr = _safe_str(descr_map.get(idx_s, ""))
+                
+                if idx_s not in ifaces:
+                    ifaces[idx_s] = {
+                        "prev_timestamp": current_ts,
+                        "prev_in_octets": _safe_int(in_map.get(idx_s)),
+                        "prev_out_octets": _safe_int(out_map.get(idx_s)),
+                        "current_bps": 0.0,
+                        "current_util_pct": 0.0
+                    }
+                
+                iface = ifaces[idx_s]
+                iface["ifDescr"] = _shorten_if_name(raw_descr)
+                iface["ifAlias"] = _safe_str(alias_map.get(idx_s))
+                iface["ifHighSpeed"] = _safe_int(speed_map.get(idx_s))
+                iface["oper_status"] = _safe_int(oper_map.get(idx_s))
+                iface["admin_status"] = _safe_int(admin_map.get(idx_s))
+                iface["max_speed"] = _get_capability_speed(raw_descr)
+                
+                # Mismatch logic: Only flag if port is UP (oper_status=1)
+                is_degraded = False
+                if iface["oper_status"] == 1 and iface["max_speed"] > 0:
+                    if iface["ifHighSpeed"] < iface["max_speed"]:
+                        is_degraded = True
+                        logger.info("SPEED MISMATCH: %s %s (%s) synced at %d, but cap %d", 
+                                    switch_ip, idx_s, raw_descr, iface["ifHighSpeed"], iface["max_speed"])
+                
+                iface["is_degraded"] = is_degraded
+                
+                d_t = current_ts - iface["prev_timestamp"]
+                if d_t > 0:
+                    d_in = _safe_int(in_map.get(idx_s)) - iface["prev_in_octets"]
+                    d_out = _safe_int(out_map.get(idx_s)) - iface["prev_out_octets"]
+                    if d_in >= 0 and d_out >= 0:
+                        iface["current_bps"] = ((d_in + d_out) * 8) / (d_t * 1_000_000)
+                        iface["current_util_pct"] = (iface["current_bps"] / iface["ifHighSpeed"] * 100) if iface["ifHighSpeed"] > 0 else 0
+                
+                iface["prev_timestamp"] = current_ts
+                iface["prev_in_octets"] = _safe_int(in_map.get(idx_s))
+                iface["prev_out_octets"] = _safe_int(out_map.get(idx_s))
+                
+            for stale in [k for k in ifaces if k not in seen]:
+                del ifaces[stale]
+                
+    except Exception as e:
+        logger.error(f"Polling completely failed for {switch_ip}: {e}")
+        async with _state_lock:
+            if switch_ip not in GLOBAL_STATE: GLOBAL_STATE[switch_ip] = {"cpu_usage": 0, "interfaces": {}}
+            GLOBAL_STATE[switch_ip]["is_reachable"] = False
 
 # ---------------------------------------------------------------------------
 # Data Packaging & WebSocket
@@ -322,8 +331,7 @@ async def _build_focus_payload(ip: str | None) -> list[dict[str, Any]] | None:
                 "current_bps": round(f.get("current_bps", 0)), 
                 "current_util_pct": round(f.get("current_util_pct", 0)), 
                 "oper_status": f.get("oper_status", 2), 
-                "admin_status": f.get("admin_status", 2),
-                "debug_info": f"Cap:{f.get('max_speed')} Sync:{f.get('ifHighSpeed')}"
+                "admin_status": f.get("admin_status", 2)
             })
     rows.sort(key=lambda r: r["current_util_pct"], reverse=True)
     return rows
@@ -399,6 +407,21 @@ app = FastAPI(title="SNMP Monitor", lifespan=lifespan)
 @app.get("/cpu", response_class=HTMLResponse)
 async def cpu_dashboard(request: Request):
     return templates.TemplateResponse(request, "cpu.html", {"monitored_switches": MONITORED_SWITCHES})
+
+@app.get("/troubleshooting", response_class=HTMLResponse)
+async def troubleshooting_page(request: Request):
+    switches = [s["ip"] for s in MONITORED_SWITCHES]
+    core_ip = switches[0] if switches else "10.0.0.1"
+    edge_ips = switches[1:] if len(switches) > 1 else ["10.0.0.2", "10.0.0.3"]
+    total_nodes = len(switches) if switches else 3
+    expected_mac = "00:1A:2B:3C:4D:5E"
+    
+    return templates.TemplateResponse(request, "troubleshooting.html", {
+        "CORE_SWITCH_IP": core_ip,
+        "EDGE_SWITCH_IPS": json.dumps(edge_ips),
+        "TOTAL_NODE_COUNT": total_nodes,
+        "EXPECTED_ROOT_MAC": expected_mac
+    })
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -481,6 +504,56 @@ async def websocket_endpoint(ws: WebSocket):
         async with _ws_lock:
             _ws_clients.discard(ws)
             _client_focus.pop(ws, None)
+
+@app.get("/api/troubleshoot/run")
+async def run_diagnostics_api():
+    anomalies = []
+    rank = 1
+    monitored_ips = [s["ip"] for s in MONITORED_SWITCHES]
+    async with _state_lock:
+        for ip in monitored_ips:
+            data = GLOBAL_STATE.get(ip)
+            if data and not data.get("is_reachable", True):
+                anomalies.append({
+                    "id": "NODE_OFFLINE",
+                    "rank": rank,
+                    "title": "SNMP Polling Timeout (Node Offline)",
+                    "source": f"{ip} | SNMPv2c UDP/161 | Timeout",
+                    "impact": "Complete loss of visibility. Switch is either powered off, disconnected, or SNMP is misconfigured.",
+                    "command": f"ping {ip}\nssh {ip}",
+                    "targetNode": ip,
+                    "risk": "CRITICAL"
+                })
+                rank += 1
+                continue
+            
+            if data:
+                for idx, iface in data.get("interfaces", {}).items():
+                    if iface.get("current_util_pct", 0) > 85 and iface.get("oper_status") == 1:
+                        anomalies.append({
+                            "id": "BCAST_STORM",
+                            "rank": rank,
+                            "title": "High Interface Saturation (Storm/Loop Risk)",
+                            "source": f"{ip} | {iface['ifDescr']} | Util: {iface['current_util_pct']}%",
+                            "impact": "Interface is heavily saturated, causing packet drops and network unresponsiveness.",
+                            "command": f"interface {iface['ifDescr']}\n shutdown",
+                            "targetNode": ip,
+                            "risk": "HIGH"
+                        })
+                        rank += 1
+                    elif iface.get("is_degraded", False) and iface.get("oper_status") == 1:
+                        anomalies.append({
+                            "id": "L2_LOOP",
+                            "rank": rank,
+                            "title": "Link Speed Degradation",
+                            "source": f"{ip} | {iface['ifDescr']} | Sync: {iface['ifHighSpeed']} / Cap: {iface['max_speed']}",
+                            "impact": "Physical layer degradation causing suboptimal throughput.",
+                            "command": f"interface {iface['ifDescr']}\n speed auto\n duplex auto",
+                            "targetNode": ip,
+                            "risk": "MEDIUM"
+                        })
+                        rank += 1
+    return {"anomalies": anomalies}
 
 if __name__ == "__main__":
     import uvicorn

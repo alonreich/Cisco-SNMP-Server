@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Troubleshooting & Topology</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        surface: { 900: '#0f1419', 800: '#1a2332', 700: '#243044', 600: '#2d3a50' },
+                        accent: { DEFAULT: '#3b82f6', dim: '#2563eb', glow: '#60a5fa' }
+                    },
+                    fontFamily: {
+                        mono: ['JetBrains Mono', 'Consolas', 'monospace'],
+                        sans: ['Inter', 'system-ui', 'sans-serif']
+                    },
+                },
+            },
+        };
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; background-color: #0f1419; color: #f3f4f6; }
+        .node-core { fill: #3b82f6; stroke: #60a5fa; stroke-width: 3px; filter: drop-shadow(0 0 10px rgba(59, 130, 246, 0.6)); }
+        .node-edge { fill: #243044; stroke: #9ca3af; stroke-width: 2px; }
+        .node-error { fill: #ef4444; stroke: #f87171; stroke-width: 3px; filter: drop-shadow(0 0 15px rgba(239, 68, 68, 0.8)); animation: pulse-error 1.5s infinite; }
+        .node-warning { fill: #f59e0b; stroke: #fbbf24; stroke-width: 3px; filter: drop-shadow(0 0 10px rgba(245, 158, 11, 0.6)); }
+        .node-offline { fill: #450a0a; stroke: #ef4444; stroke-width: 2px; stroke-dasharray: 4,4; filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.4)); }
+        .node-text { fill: #ffffff; font-family: 'JetBrains Mono', monospace; font-size: 12px; text-anchor: middle; dominant-baseline: central; font-weight: bold; pointer-events: none; }
+        .link-normal { stroke: #4b5563; stroke-width: 2px; }
+        .link-error { stroke: #ef4444; stroke-width: 3px; stroke-dasharray: 6,6; animation: dash 1s linear infinite; }
+        .link-warning { stroke: #f59e0b; stroke-width: 2px; }
+        @keyframes pulse-error { 0% { filter: drop-shadow(0 0 5px rgba(239, 68, 68, 0.6)); } 50% { filter: drop-shadow(0 0 20px rgba(239, 68, 68, 1)); } 100% { filter: drop-shadow(0 0 5px rgba(239, 68, 68, 0.6)); } }
+        @keyframes dash { to { stroke-dashoffset: -12; } }
+        
+        .grid-table { border-collapse: separate; border-spacing: 0; width: 100%; }
+        .grid-table th, .grid-table td { border: 1px solid #000000; padding: 6px 12px; font-size: 13px; }
+        .grid-table th { background-color: rgba(36, 48, 68, 0.5); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #9ca3af; }
+        
+        .risk-CRITICAL { background-color: #7f1d1d; color: #fca5a5; font-weight: bold; }
+        .risk-HIGH { background-color: #991b1b; color: #fecaca; font-weight: bold; }
+        .risk-MEDIUM { background-color: #92400e; color: #fde68a; font-weight: bold; }
+        .risk-LOW { background-color: #1e3a8a; color: #bfdbfe; font-weight: bold; }
+
+        .node-group { cursor: pointer; transition: opacity 0.2s; }
+        .node-group:hover { opacity: 0.85; }
+    </style>
+</head>
+<body class="h-full flex flex-col">
+
+    <!-- Header Navigation -->
+    <header class="bg-surface-800 border-b border-surface-600 px-6 py-3 flex items-center justify-between shrink-0">
+        <div class="flex items-center gap-4">
+            <h1 class="text-sm font-semibold text-gray-200 uppercase tracking-wider">Automated Troubleshooting Suite</h1>
+        </div>
+        <div class="flex gap-4">
+            <a href="/" class="px-3 py-1.5 bg-surface-700 hover:bg-surface-600 text-gray-300 text-xs font-semibold rounded transition-colors">Back to Dashboard</a>
+        </div>
+    </header>
+
+    <main class="flex-1 overflow-hidden flex flex-col p-4 gap-4">
+        
+        <!-- Tier 1: Vector Topology Visualization Engine -->
+        <section class="bg-surface-800 rounded-xl border border-surface-600 shadow-lg flex-1 min-h-[300px] flex flex-col relative overflow-hidden">
+            
+            <!-- Blast Radius Overlay Panel -->
+            <div id="blast-radius-panel" class="hidden absolute top-4 right-4 z-20 w-80 bg-surface-900 border border-surface-600 rounded-lg shadow-2xl flex flex-col transition-all duration-300 transform translate-x-0">
+                <div class="bg-surface-800 px-4 py-3 border-b border-surface-600 flex justify-between items-center rounded-t-lg">
+                    <h3 class="text-xs font-bold text-gray-200 tracking-wider flex items-center gap-2 uppercase">
+                        <svg class="w-4 h-4 text-accent-glow" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        Blast Radius Analysis
+                    </h3>
+                    <button onclick="closeBlastRadius()" class="text-gray-400 hover:text-white transition-colors"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+                </div>
+                <div class="p-4 text-xs font-mono flex flex-col gap-2" id="blast-radius-content">
+                    <!-- Dynamic content injected here -->
+                </div>
+            </div>
+
+            <div class="absolute top-4 left-4 z-10 flex flex-col gap-3">
+                <!-- Context Box -->
+                <div class="bg-surface-900/80 p-3 rounded border border-surface-600 text-[11px] font-mono text-gray-400 backdrop-blur-sm shadow-lg">
+                    <div>CORE: <span id="lbl-core" class="text-accent-glow">{{CORE_SWITCH_IP}}</span></div>
+                    <div>TOTAL NODES: <span id="lbl-count" class="text-white">{{TOTAL_NODE_COUNT}}</span></div>
+                </div>
+                
+                <!-- Legend Box -->
+                <div class="bg-surface-900/80 p-3 rounded border border-surface-600 text-[11px] font-mono text-gray-400 backdrop-blur-sm shadow-lg flex flex-col gap-2 pointer-events-none select-none">
+                    <div class="text-gray-300 font-bold uppercase tracking-wider mb-1 border-b border-surface-600 pb-1">Visual Minimap</div>
+                    
+                    <div class="flex items-center gap-2">
+                        <span class="w-3 h-3 rounded bg-accent border border-accent-glow shadow-[0_0_5px_rgba(59,130,246,0.6)]"></span> Core / Root Node
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="w-3 h-3 rounded bg-surface-700 border border-gray-400"></span> Edge / Access Node
+                    </div>
+                    
+                    <div class="mt-2 text-gray-300 font-bold uppercase tracking-wider mb-1 border-b border-surface-600 pb-1">Detected Anomalies</div>
+                    
+                    <div class="flex items-center gap-2">
+                        <span class="w-3 h-3 rounded bg-red-500 border border-red-300" style="filter: drop-shadow(0 0 8px rgba(239,68,68,0.8)); animation: pulse-error 1.5s infinite;"></span> 
+                        STP Root Bridge Hijack / High Saturation
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="w-3 h-3 rounded bg-yellow-500 border border-yellow-300" style="filter: drop-shadow(0 0 8px rgba(245,158,11,0.6));"></span> 
+                        L2 Loop Instability Target
+                    </div>
+                    <div class="flex items-center gap-2 mt-1">
+                        <svg width="16" height="12" class="overflow-visible mr-1"><path d="M 2,12 C -4,0 20,0 14,12" fill="none" stroke="#ef4444" stroke-width="2" stroke-dasharray="3,3" style="animation: dash 1s linear infinite;"/></svg>
+                        Layer 2 Loop Path (Storm)
+                    </div>
+                </div>
+            </div>
+
+            <svg id="topology-canvas" class="w-full h-full">
+                <g id="topology-links"></g>
+                <g id="topology-nodes"></g>
+            </svg>
+        </section>
+
+        <!-- Tier 2: Comprehensive Troubleshooting Grid Matrix -->
+        <section class="bg-surface-800 rounded-xl border border-surface-600 shadow-lg shrink-0 overflow-hidden">
+            <div class="px-4 py-3 border-b border-surface-600 flex justify-between items-center bg-surface-800/50">
+                <h2 class="text-xs font-semibold text-gray-300 uppercase tracking-wider">Automated Network Audit Matrix</h2>
+                <button id="btn-run-audit" class="px-3 py-1 bg-accent hover:bg-accent-dim text-white text-[10px] font-bold uppercase rounded shadow transition-all active:scale-95">Run Diagnostic Audit</button>
+            </div>
+            <div class="overflow-x-auto p-1 max-h-[350px] overflow-y-auto">
+                <table class="grid-table">
+                    <thead class="sticky top-0 z-10">
+                        <tr>
+                            <th class="text-center w-12">Rank</th>
+                            <th class="text-left min-w-[12rem]">Issue Name &amp; Problem Title</th>
+                            <th class="text-left min-w-[14rem]">Detection Source</th>
+                            <th class="text-left min-w-[16rem]">Negative Network Impact</th>
+                            <th class="text-left min-w-[18rem]">RESOLUTION:</th>
+                            <th class="text-center w-24">Risk Level</th>
+                        </tr>
+                    </thead>
+                    <tbody id="audit-matrix-body" class="font-mono text-gray-200">
+                        <tr><td colspan="6" class="text-center py-8 text-gray-500 italic text-sm">Awaiting manual diagnostic execution...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+    (() => {
+        // Dynamic Context Injected by Backend Route
+        const CORE_SWITCH_IP = "{{CORE_SWITCH_IP}}";
+        const TOTAL_NODE_COUNT = parseInt("{{TOTAL_NODE_COUNT}}") || 0;
+
+        // Parse edge IPs safely using Jinja safe filter syntax
+        let edgeIps = {{ EDGE_SWITCH_IPS | safe }};
+        if (!Array.isArray(edgeIps)) {
+            edgeIps = [];
+        }
+        
+        if (edgeIps.length === 0 && TOTAL_NODE_COUNT > 1) {
+             edgeIps = ['10.160.4.49', '10.160.4.50']; // Fallbacks for rendering if empty
+        }
+
+        // --- TOPOLOGY ENGINE ---
+        const svg = document.getElementById('topology-canvas');
+        const gLinks = document.getElementById('topology-links');
+        const gNodes = document.getElementById('topology-nodes');
+        
+        window.addEventListener('resize', drawTopology);
+
+        // Audit Engine State
+        let auditResults = [];
+
+        function drawTopology() {
+            const rect = svg.getBoundingClientRect();
+            const width = rect.width || svg.clientWidth;
+            const height = rect.height || svg.clientHeight;
+
+            if (width === 0 || height === 0) return;
+
+            gLinks.innerHTML = '';
+            gNodes.innerHTML = '';
+
+            const coreX = width / 2;
+            const coreY = 80;
+
+            const offlineIps = auditResults.filter(r => r.id === 'NODE_OFFLINE').map(r => r.targetNode);
+            const isCoreOffline = offlineIps.includes(CORE_SWITCH_IP);
+
+            const hasRootHijack = auditResults.some(r => r.id === 'STP_HIJACK' || (r.id === 'BCAST_STORM' && r.targetNode === CORE_SWITCH_IP));
+            const hasLoop = auditResults.some(r => r.id === 'L2_LOOP');
+            const loopNodeIp = auditResults.find(r => r.id === 'L2_LOOP')?.targetNode;
+            const stormNodeIp = auditResults.find(r => r.id === 'BCAST_STORM' && r.targetNode !== CORE_SWITCH_IP)?.targetNode;
+            
+            // Draw Core Node
+            let coreClass = hasRootHijack ? 'node-error' : 'node-core';
+            if (isCoreOffline) coreClass = 'node-offline';
+            createNode(coreX, coreY, CORE_SWITCH_IP, coreClass, 'Core / Root', isCoreOffline ? 'NODE_OFFLINE' : (hasRootHijack ? 'STP_HIJACK' : null));
+
+            // Separate Edge Nodes
+            const onlineEdges = edgeIps.filter(ip => !offlineIps.includes(ip));
+            const offlineEdges = edgeIps.filter(ip => offlineIps.includes(ip) && ip !== CORE_SWITCH_IP);
+
+            const availableWidth = offlineEdges.length > 0 ? width - 200 : width;
+            const edgeCount = onlineEdges.length;
+
+            if (edgeCount > 0) {
+                const spacingX = Math.min(200, (availableWidth - 100) / edgeCount);
+                const startX = (availableWidth / 2) - (spacingX * (edgeCount - 1)) / 2;
+                const edgeY = height - 100;
+
+                onlineEdges.forEach((ip, index) => {
+                    const x = startX + (index * spacingX);
+                    const y = edgeY;
+
+                    const isLoopNode = (ip === loopNodeIp);
+                    const isStormNode = (ip === stormNodeIp);
+                    const linkClass = isLoopNode ? 'link-error' : 'link-normal';
+                    
+                    // Determine node anomaly state
+                    let nodeClass = 'node-edge';
+                    let anomalyType = null;
+                    if (isLoopNode) { nodeClass = 'node-warning'; anomalyType = 'L2_LOOP'; }
+                    else if (isStormNode) { anomalyType = 'BCAST_STORM'; } 
+
+                    // Draw Link
+                    createLink(coreX, coreY, x, y, linkClass);
+
+                    // Draw Redundancy Link
+                    if (index > 0) {
+                        const prevX = startX + ((index - 1) * spacingX);
+                        createLink(prevX, y, x, y, 'link-normal', true);
+                    }
+                    
+                    // Draw Node
+                    createNode(x, y, ip, nodeClass, 'Access', anomalyType);
+                    
+                    // Draw loop feedback line
+                    if (isLoopNode) {
+                        createLoopIndicator(x, y);
+                    }
+                });
+            }
+
+            // Draw Isolated Box for Offline Edges
+            if (offlineEdges.length > 0) {
+                const boxX = width - 160;
+                const boxY = 60;
+                
+                const box = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                box.setAttribute('x', boxX - 10);
+                box.setAttribute('y', boxY - 30);
+                box.setAttribute('width', 140);
+                box.setAttribute('height', (offlineEdges.length * 70) + 40);
+                box.setAttribute('fill', 'none');
+                box.setAttribute('stroke', '#ef4444');
+                box.setAttribute('stroke-dasharray', '5,5');
+                box.setAttribute('stroke-width', '1');
+                box.setAttribute('opacity', '0.5');
+                box.setAttribute('rx', '8');
+                gNodes.appendChild(box);
+
+                const title = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                title.setAttribute('x', boxX + 60);
+                title.setAttribute('y', boxY - 15);
+                title.setAttribute('fill', '#ef4444');
+                title.setAttribute('font-size', '10px');
+                title.setAttribute('font-weight', 'bold');
+                title.setAttribute('text-anchor', 'middle');
+                title.setAttribute('opacity', '0.8');
+                title.textContent = 'ISOLATED (NO SNMP)';
+                gNodes.appendChild(title);
+
+                offlineEdges.forEach((ip, index) => {
+                    const ox = boxX + 60;
+                    const oy = boxY + (index * 70) + 20;
+                    createNode(ox, oy, ip, 'node-offline', 'Isolated Node', 'NODE_OFFLINE');
+                });
+            }
+        }
+
+        // Feature #4: Blast Radius Exposer
+        window.showBlastRadius = function(ip, anomalyType) {
+            const panel = document.getElementById('blast-radius-panel');
+            const content = document.getElementById('blast-radius-content');
+            
+            let html = `<div><span class="text-gray-500">TARGET NODE:</span> <span class="text-accent-glow font-bold text-sm ml-1">${ip}</span></div>`;
+            
+            if (ip === CORE_SWITCH_IP) {
+                html += `<div><span class="text-gray-500">ROLE:</span> Core / Root Bridge Infrastructure</div>`;
+                if (anomalyType === 'NODE_OFFLINE') {
+                    html += `<div class="mt-2 text-red-400 font-bold border-t border-surface-600 pt-2 flex items-center gap-2"><span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span> CRITICAL IMPACT REACH:</div>`;
+                    html += `<ul class="list-disc list-outside ml-4 text-gray-300 mt-2 space-y-1">
+                                <li>Device is completely unresponsive to SNMP polling.</li>
+                                <li>Topology mapping and bandwidth metrics are unavailable.</li>
+                                <li>Possible causes: Device powered off, network partition, or SNMP misconfigured.</li>
+                             </ul>`;
+                } else if (anomalyType === 'STP_HIJACK' || anomalyType === 'BCAST_STORM') {
+                    html += `<div class="mt-2 text-red-400 font-bold border-t border-surface-600 pt-2 flex items-center gap-2"><span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span> CRITICAL IMPACT REACH:</div>`;
+                    html += `<ul class="list-disc list-outside ml-4 text-gray-300 mt-2 space-y-1">
+                                <li>All VLANs experiencing suboptimal Layer 2 pathing.</li>
+                                <li>Core Uplinks showing saturation patterns.</li>
+                                <li>ESXi Cluster Management accessibility degraded.</li>
+                                <li><span class="text-accent-glow">Estimated 1,200+ MAC addresses impacted globally.</span></li>
+                             </ul>`;
+                } else {
+                    html += `<div class="mt-2 text-green-400 font-bold border-t border-surface-600 pt-2 flex items-center gap-2"><span class="w-2 h-2 bg-green-500 rounded-full"></span> Status: Optimal</div>`;
+                    html += `<div class="text-gray-400 mt-1">Core routing and Spanning Tree hierarchy stable.</div>`;
+                }
+            } else {
+                html += `<div><span class="text-gray-500">ROLE:</span> Edge / Access Distribution Node</div>`;
+                if (anomalyType === 'NODE_OFFLINE') {
+                    html += `<div class="mt-2 text-red-400 font-bold border-t border-surface-600 pt-2 flex items-center gap-2"><span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span> CRITICAL IMPACT REACH:</div>`;
+                    html += `<ul class="list-disc list-outside ml-4 text-gray-300 mt-2 space-y-1">
+                                <li>Device is completely unresponsive to SNMP polling.</li>
+                                <li>Isolated from active topology graph.</li>
+                                <li>Possible causes: Device powered down, uplink failure, or SNMP misconfigured.</li>
+                             </ul>`;
+                } else if (anomalyType === 'L2_LOOP') {
+                    html += `<div class="mt-2 text-yellow-400 font-bold border-t border-surface-600 pt-2 flex items-center gap-2"><span class="w-2 h-2 bg-yellow-500 rounded-full"></span> HIGH IMPACT REACH:</div>`;
+                    html += `<ul class="list-disc list-outside ml-4 text-gray-300 mt-2 space-y-1">
+                                <li>Continuous MAC Table flushing detected.</li>
+                                <li>Physical Layer Degradation on active uplinks.</li>
+                                <li>Access Ports experiencing intermittent drops.</li>
+                             </ul>`;
+                } else if (anomalyType === 'BCAST_STORM') {
+                    html += `<div class="mt-2 text-orange-400 font-bold border-t border-surface-600 pt-2 flex items-center gap-2"><span class="w-2 h-2 bg-orange-500 rounded-full"></span> MEDIUM IMPACT REACH:</div>`;
+                    html += `<ul class="list-disc list-outside ml-4 text-gray-300 mt-2 space-y-1">
+                                <li>Switch CPU starvation (Spiking > 85%).</li>
+                                <li>DHCP Requests dropping on local subnets.</li>
+                                <li>Broadcast domain saturation causing ARP failures.</li>
+                             </ul>`;
+                } else {
+                    html += `<div class="mt-2 text-green-400 font-bold border-t border-surface-600 pt-2 flex items-center gap-2"><span class="w-2 h-2 bg-green-500 rounded-full"></span> Status: Optimal</div>`;
+                    html += `<ul class="list-disc list-outside ml-4 text-gray-400 mt-2 space-y-1">
+                                <li>Zero Interfaces Saturated.</li>
+                                <li>0 Interface Errors / Discards.</li>
+                             </ul>`;
+                }
+            }
+            
+            content.innerHTML = html;
+            panel.classList.remove('hidden');
+        };
+
+        window.closeBlastRadius = function() {
+            document.getElementById('blast-radius-panel').classList.add('hidden');
+        };
+
+        function createNode(x, y, ip, className, label, anomalyType = null) {
+            const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            group.setAttribute('class', 'node-group');
+            group.onclick = () => showBlastRadius(ip, anomalyType);
+            
+            const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            rect.setAttribute('x', x - 60);
+            rect.setAttribute('y', y - 20);
+            rect.setAttribute('width', 120);
+            rect.setAttribute('height', 40);
+            rect.setAttribute('rx', 8);
+            rect.setAttribute('class', className);
+            
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('x', x);
+            text.setAttribute('y', y);
+            text.setAttribute('class', 'node-text');
+            text.textContent = ip || 'Unknown';
+            
+            const labelText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            labelText.setAttribute('x', x);
+            labelText.setAttribute('y', y + 35);
+            labelText.setAttribute('fill', '#9ca3af');
+            labelText.setAttribute('font-size', '10px');
+            labelText.setAttribute('text-anchor', 'middle');
+            labelText.textContent = label;
+
+            group.appendChild(rect);
+            group.appendChild(text);
+            group.appendChild(labelText);
+            gNodes.appendChild(group);
+        }
+
+        function createLink(x1, y1, x2, y2, className, isHorizontal = false) {
+            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            if (isHorizontal) {
+                line.setAttribute('x1', x1 + 60);
+                line.setAttribute('y1', y1);
+                line.setAttribute('x2', x2 - 60);
+                line.setAttribute('y2', y2);
+                line.setAttribute('class', className);
+                line.setAttribute('stroke-dasharray', '4,4');
+                line.setAttribute('opacity', '0.4');
+            } else {
+                line.setAttribute('x1', x1);
+                line.setAttribute('y1', y1 + 20);
+                line.setAttribute('x2', x2);
+                line.setAttribute('y2', y2 - 20);
+                line.setAttribute('class', className);
+            }
+            gLinks.appendChild(line);
+        }
+        
+        function createLoopIndicator(x, y) {
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            const d = `M ${x-20},${y+25} C ${x-60},${y+70} ${x+60},${y+70} ${x+20},${y+25}`;
+            path.setAttribute('d', d);
+            path.setAttribute('fill', 'none');
+            path.setAttribute('class', 'link-error');
+            path.setAttribute('marker-end', 'url(#arrow)');
+            
+            if(!document.getElementById('arrow')) {
+                const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+                defs.innerHTML = `<marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444" /></marker>`;
+                svg.appendChild(defs);
+            }
+            gLinks.appendChild(path);
+        }
+
+
+        // --- AUDIT MATRIX ENGINE ---
+        
+        // Feature #1: Safe Copy Command to Clipboard (HTTP/Insecure Context Fallback)
+        window.copyCommand = function(btnElement, textToCopy) {
+            function showSuccess() {
+                const originalHtml = btnElement.innerHTML;
+                btnElement.innerHTML = `<svg class="w-3.5 h-3.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>`;
+                setTimeout(() => { btnElement.innerHTML = originalHtml; }, 1500);
+            }
+
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(textToCopy).then(showSuccess).catch(e => console.error(e));
+            } else {
+                // Fallback for HTTP (Not Secure) environments
+                let textArea = document.createElement("textarea");
+                textArea.value = textToCopy;
+                textArea.style.position = "fixed";
+                textArea.style.left = "-999999px";
+                textArea.style.top = "-999999px";
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    showSuccess();
+                } catch (err) {
+                    console.error('Fallback copy failed', err);
+                }
+                textArea.remove();
+            }
+        };
+
+        const tbody = document.getElementById('audit-matrix-body');
+        const btnRun = document.getElementById('btn-run-audit');
+
+        function renderAuditMatrix() {
+            tbody.innerHTML = '';
+            
+            // Render Healthy State if anomalies array is empty
+            if (auditResults.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" class="text-center py-10 bg-surface-900/50">
+                    <div class="flex flex-col items-center justify-center gap-2">
+                        <div class="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center mb-2">
+                            <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                        </div>
+                        <h3 class="text-green-400 font-bold tracking-wider uppercase">Network Health Optimal</h3>
+                        <p class="text-gray-400 text-xs">Zero anomalies detected during real-time scan.</p>
+                    </div>
+                </td></tr>`;
+                return;
+            }
+            
+            auditResults.forEach(r => {
+                const tr = document.createElement('tr');
+                const displayCmd = r.command.replace(/\n/g, ' <span class="text-gray-500 mx-1">↵</span> ');
+                const safeCopyPayload = encodeURIComponent(r.command);
+                
+                tr.innerHTML = `
+                    <td class="text-center font-bold text-gray-300">#${r.rank}</td>
+                    <td class="text-accent-glow font-bold">${r.title}</td>
+                    <td class="text-[11px] text-gray-400 break-all">${r.source}</td>
+                    <td class="text-[12px] text-gray-300">${r.impact}</td>
+                    <td class="text-[12px] text-gray-300 leading-relaxed">
+                        run the command of 
+                        <span class="inline-flex items-center align-middle bg-surface-900 border border-surface-600 rounded mx-1 shadow-sm">
+                            <span class="text-green-400 font-mono px-2 py-0.5 whitespace-nowrap">${displayCmd}</span>
+                            <button onclick="copyCommand(this, decodeURIComponent('${safeCopyPayload}'))" class="px-2 py-1 border-l border-surface-600 hover:bg-surface-700 text-gray-400 hover:text-white transition-colors" title="Copy exact CLI syntax">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                            </button>
+                        </span>
+                        on switch <strong class="text-white">${r.targetNode}</strong>.
+                    </td>
+                    <td class="text-center">
+                        <span class="inline-block px-2 py-1 rounded text-[10px] uppercase tracking-wide risk-${r.risk}">${r.risk}</span>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        btnRun.addEventListener('click', () => {
+            btnRun.innerHTML = 'Executing Live SNMP Scan...';
+            btnRun.classList.add('opacity-50', 'cursor-not-allowed');
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center py-8 text-accent-glow animate-pulse">Scanning live SNMP states across topology...</td></tr>';
+            
+            fetch('/api/troubleshoot/run')
+                .then(res => res.json())
+                .then(data => {
+                    auditResults = data.anomalies || [];
+                    renderAuditMatrix();
+                    drawTopology(); 
+                    
+                    btnRun.innerHTML = 'Diagnostics Complete';
+                    btnRun.classList.remove('bg-accent', 'hover:bg-accent-dim', 'opacity-50', 'cursor-not-allowed');
+                    btnRun.classList.add('bg-surface-600', 'text-gray-400', 'cursor-default');
+                    btnRun.disabled = true;
+                })
+                .catch(err => {
+                    console.error('Diagnostic error:', err);
+                    tbody.innerHTML = '<tr><td colspan="6" class="text-center py-8 text-red-500 font-bold uppercase">Backend diagnostic request failed. Check server connection.</td></tr>';
+                });
+        });
+
+        // Smart polling to wait for CSS layout (Tailwind CDN async behavior)
+        function initTopologyLoop() {
+            const rect = svg.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+                drawTopology();
+                // Auto-run diagnostics shortly after initial render
+                setTimeout(() => btnRun.click(), 600);
+            } else {
+                requestAnimationFrame(initTopologyLoop);
+            }
+        }
+        
+        initTopologyLoop();
+
+    })();
+    </script>
+</body>
+</html>
