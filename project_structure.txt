@@ -58,6 +58,19 @@ install.bat
 - **UI**: Optimized thresholds: Green (0-25%), Yellow (26-65%), Red (66-100%).
 - **Navigation**: Dedicated button with 60px separation from data legend.
 
+### Feature: Switch Focus Mode (Deep-Dive)
+- **Goal**: Allow operators to inspect all physical ports of a single device.
+- **Logic**: 
+    1. Click any Switch IP in the leaderboard or access list.
+    2. Switches from "Top N Active" view to "Single Device Comprehensive" view.
+    3. Displays **ALL** interfaces (Up, Down, and Idle) for that switch.
+    4. Sorted by traffic (highest to lowest).
+- **UI**: 
+    1. Clickable IP links in all tables.
+    2. Focus title: `Focus: [IP Address]`.
+    3. Status badges `[UP]` / `[DOWN]` shown next to interface names in focus mode.
+    4. Navigation: "Global Leaderboard" button appears to return to multi-switch view; "CPU Usage" is hidden.
+
 ### Feature: Speed Degradation Detection
 - **Logic**: Infers hardware capability from name (e.g., Gi -> 1Gbps) and compares to current link speed.
 - **UI**: Highlights speed in Red background with Cyan text; includes technical info icon.

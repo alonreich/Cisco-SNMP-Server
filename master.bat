@@ -43,4 +43,4 @@ for /d /r "%~dp0" %%D in (__pycache__) do (
     )
 )
 
-"%VENV_PY%" -B "%~dp0master.py"
+"%VENV_PY%" -B "%~dp0master.py" > "%~dp0monitor.log" 2>&1

@@ -66,6 +66,17 @@
             cursor: help;
             vertical-align: middle;
         }
+        .clickable-ip {
+            cursor: pointer;
+            text-decoration: underline;
+            text-decoration-style: dotted;
+            text-underline-offset: 3px;
+        }
+        .clickable-ip:hover {
+            color: #60a5fa !important;
+        }
+        .status-up { color: #22c55e; }
+        .status-down { color: #ef4444; }
     </style>
 </head>
 <body class="h-full bg-surface-900 text-gray-100 antialiased">
@@ -87,13 +98,12 @@
                     </select>
                 </div>
                 <div class="shrink-0 flex items-center gap-2">
-                    <h2 class="text-[16px] font-semibold text-gray-300 uppercase tracking-wider">
+                    <h2 id="dashboard-title" class="text-[13px] font-semibold text-gray-300 uppercase tracking-wider">
                         Interface Leaderboard
                     </h2>
-                    <span id="row-count" class="text-gray-500 text-[14px] font-normal normal-case">(0 interfaces)</span>
+                    <span id="row-count" class="text-gray-500 text-[11px] font-normal normal-case">(0 interfaces)</span>
                 </div>
-                <div class="flex-1 flex items-center gap-3 text-[14px] border-l border-surface-600 pl-4">
-
+                <div class="flex-1 flex items-center gap-3 text-[11px] border-l border-surface-600 pl-4">
                     <span id="ws-status" class="flex items-center gap-2 text-gray-400">
                         <span class="status-dot w-2 h-2 rounded-full bg-yellow-500"></span>
                         Connecting…
@@ -107,15 +117,18 @@
                     <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-red-500"></span> &gt; 75%</span>
                 </div>
 
-                <a href="/cpu" class="ml-[60px] px-3 py-1.5 bg-accent hover:bg-accent-dim text-white text-[10px] font-bold uppercase tracking-wider rounded-lg shadow-sm transition-all duration-200 active:scale-95">
+                <button type="button" id="btn-global-leaderboard" class="hidden ml-[60px] px-3 py-1.5 bg-accent hover:bg-accent-dim text-white text-[10px] font-bold uppercase tracking-wider rounded-lg shadow-sm transition-all duration-200 active:scale-95">
+                    Global Leaderboard
+                </button>
+                <a href="/cpu" id="btn-cpu-usage" class="ml-[60px] px-3 py-1.5 bg-accent hover:bg-accent-dim text-white text-[10px] font-bold uppercase tracking-wider rounded-lg shadow-sm transition-all duration-200 active:scale-95">
                     CPU Usage
                 </a>
             </div>
 
             <div class="overflow-x-auto p-1">
-                <table class="leaderboard-table w-full text-[15px]">
+                <table class="leaderboard-table w-full text-[13px]">
                     <thead>
-                        <tr class="text-[13px] font-semibold text-gray-400 uppercase tracking-wider bg-surface-700/50">
+                        <tr class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider bg-surface-700/50">
                             <th class="px-4 py-1.5 text-center">Switch IP</th>
                             <th class="px-4 py-1.5 text-center">Interface</th>
                             <th class="px-4 py-1.5 text-center">Description</th>
@@ -135,11 +148,11 @@
             </div>
         </section>
 
-        <!-- SNMP Access List (below leaderboard) -->
+        <!-- SNMP Access List -->
         <section class="bg-surface-800 rounded-xl border border-surface-600 p-5 shadow-lg">
             <div class="text-center mb-4">
-                <h2 class="text-[16px] font-semibold text-gray-300 uppercase tracking-wider">SNMP Access List</h2>
-                <p class="text-[14px] text-gray-500 mt-1 text-center">Only listed switches are polled and shown on this dashboard.</p>
+                <h2 class="text-[13px] font-semibold text-gray-300 uppercase tracking-wider">SNMP Access List</h2>
+                <p class="text-[11px] text-gray-500 mt-1 text-center">Only listed switches are polled and shown on this dashboard.</p>
             </div>
 
             <div class="flex justify-center mb-4">
@@ -150,30 +163,29 @@
                 </button>
             </div>
 
-            <div id="acl-empty" class="text-[14px] text-gray-500 py-6 text-center border border-dashed border-surface-600 rounded-lg mb-4
+            <div id="acl-empty" class="text-[11px] text-gray-500 py-6 text-center border border-dashed border-surface-600 rounded-lg mb-4
                  {% if monitored_switches %}hidden{% endif %}">
                 No switches in the access list. Click <strong class="text-gray-400">Add Cisco Switch</strong> to allow SNMP polling from a device.
             </div>
 
             <div class="overflow-x-auto mb-4 {% if not monitored_switches %}hidden{% endif %}" id="acl-table-wrap">
-                <table class="w-full text-[15px]">
+                <table class="w-full text-[13px]">
                     <thead>
-                        <tr class="text-left text-[13px] font-semibold text-gray-400 uppercase tracking-wider border-b border-surface-600">
+                        <tr class="text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider border-b border-surface-600">
                             <th class="px-3 py-1">IPv4 Address</th>
                             <th class="px-3 py-1">SNMPv2c Community (RO)</th>
                             <th class="px-3 py-1">Poll Interval</th>
                             <th class="px-3 py-1 w-24 text-right">Action</th>
                         </tr>
                     </thead>
-
                     <tbody id="switch-acl-body" class="divide-y divide-surface-600">
                         {% for sw in monitored_switches %}
                         <tr data-ip="{{ sw.ip }}">
-                            <td class="px-3 py-1 font-mono text-accent-glow">{{ sw.ip }}</td>
+                            <td class="px-3 py-1 font-mono text-accent-glow clickable-ip" data-ip="{{ sw.ip }}">{{ sw.ip }}</td>
                             <td class="px-3 py-1 font-mono text-gray-300">{{ sw.community }}</td>
                             <td class="px-3 py-1">
                                 <select class="acl-poll-interval w-full min-w-[8rem] bg-surface-700 border border-surface-600 rounded-lg px-2 py-1 text-xs text-gray-100"
-                                        data-ip="{{ sw.ip }}" aria-label="Poll interval for {{ sw.ip }}">
+                                        data-ip="{{ sw.ip }}">
                                     <option value="5"   {% if sw.polling_interval == 5 %}selected{% endif %}>5 seconds</option>
                                     <option value="10"  {% if sw.polling_interval == 10 %}selected{% endif %}>10 seconds</option>
                                     <option value="30"  {% if sw.polling_interval == 30 or not sw.polling_interval %}selected{% endif %}>30 seconds</option>
@@ -191,39 +203,28 @@
                     </tbody>
                 </table>
             </div>
-
             <p class="text-[10px] text-gray-500 mt-4 text-center border-t border-surface-600 pt-3">
                 Poll interval is per switch. Name, speed &amp; traffic refresh each poll cycle.
             </p>
-
             <p id="acl-feedback" class="mt-3 text-xs text-center hidden transition-all duration-300"></p>
         </section>
 
         <!-- Add Switch Modal -->
         <div id="add-switch-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <div class="bg-surface-800 border border-surface-600 rounded-xl shadow-2xl w-full max-w-md p-6" role="dialog" aria-labelledby="modal-title">
-                <h3 id="modal-title" class="text-lg font-semibold text-gray-100 mb-1 text-center">Add Cisco Switch</h3>
-                <p class="text-xs text-gray-400 mb-5 text-center">Grant read-only SNMPv2c access for this IPv4 address. Traffic from other devices is ignored.</p>
+            <div class="bg-surface-800 border border-surface-600 rounded-xl shadow-2xl w-full max-w-md p-6">
+                <h3 class="text-lg font-semibold text-gray-100 mb-1 text-center">Add Cisco Switch</h3>
                 <form id="add-switch-form" class="space-y-4">
                     <div>
-                        <label for="new-switch-ip" class="block text-xs font-medium text-gray-400 mb-2">IPv4 Address</label>
-                        <input type="text" id="new-switch-ip" name="ip" required
-                               placeholder="10.0.0.1" autocomplete="off"
-                               class="w-full bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 text-sm font-mono text-gray-100
-                                      placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent">
+                        <label class="block text-xs font-medium text-gray-400 mb-2">IPv4 Address</label>
+                        <input type="text" id="new-switch-ip" required class="w-full bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 text-sm font-mono text-gray-100">
                     </div>
                     <div>
-                        <label for="new-switch-community" class="block text-xs font-medium text-gray-400 mb-2">SNMPv2c Community (read-only)</label>
-                        <input type="text" id="new-switch-community" name="community" required
-                               placeholder="public" autocomplete="off"
-                               class="w-full bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 text-sm font-mono text-gray-100
-                                      placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent">
+                        <label class="block text-xs font-medium text-gray-400 mb-2">SNMPv2c Community</label>
+                        <input type="text" id="new-switch-community" required class="w-full bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 text-sm font-mono text-gray-100">
                     </div>
                     <div>
-                        <label for="new-switch-polling-interval" class="block text-xs font-medium text-gray-400 mb-2">Poll Interval</label>
-                        <select id="new-switch-polling-interval" name="polling_interval" required
-                                class="w-full bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 text-sm text-gray-100
-                                       focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent">
+                        <label class="block text-xs font-medium text-gray-400 mb-2">Poll Interval</label>
+                        <select id="new-switch-polling-interval" required class="w-full bg-surface-700 border border-surface-600 rounded-lg px-3 py-2 text-sm text-gray-100">
                             <option value="5">5 seconds</option>
                             <option value="10">10 seconds</option>
                             <option value="30" selected>30 seconds</option>
@@ -234,13 +235,8 @@
                     </div>
                     <p id="modal-error" class="text-xs text-red-400 hidden text-center"></p>
                     <div class="flex justify-end gap-3 pt-2">
-                        <button type="button" id="btn-modal-cancel"
-                                class="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors">Cancel</button>
-                        <button type="submit"
-                                class="px-4 py-2 bg-accent hover:bg-accent-dim text-white text-sm font-medium rounded-lg
-                                       transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-accent/50">
-                            Add to Access List
-                        </button>
+                        <button type="button" id="btn-modal-cancel" class="px-4 py-2 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
+                        <button type="submit" class="px-4 py-2 bg-accent hover:bg-accent-dim text-white text-sm font-medium rounded-lg">Add Switch</button>
                     </div>
                 </form>
             </div>
@@ -257,6 +253,10 @@
         let reconnectTimer = null;
         let leaderboardData = [];
         let switchAcl = {{ monitored_switches | tojson }};
+        let focusedSwitchIp = null;
+        
+        let cachedGlobalLeaderboard = [];
+        let cachedFocusedData = [];
 
         const wsStatusEl         = document.getElementById('ws-status');
         const lastUpdateEl       = document.getElementById('last-update');
@@ -264,6 +264,9 @@
         const rowCountEl         = document.getElementById('row-count');
         const displaySelect      = document.getElementById('display-limit');
         const newSwitchPolling   = document.getElementById('new-switch-polling-interval');
+        const dashboardTitle     = document.getElementById('dashboard-title');
+        const btnCpuUsage        = document.getElementById('btn-cpu-usage');
+        const btnGlobalLeaderboard = document.getElementById('btn-global-leaderboard');
 
         const POLL_INTERVAL_OPTS = [
             { value: 5, label: '5 seconds' },
@@ -289,6 +292,42 @@
                 `<span class="status-dot w-2 h-2 rounded-full ${colors[state] || 'bg-gray-500'}"></span>${label}`;
         }
 
+        function setFocus(ip, updateUrl = true) {
+            focusedSwitchIp = ip;
+            if (updateUrl) {
+                const url = new URL(window.location);
+                if (focusedSwitchIp) url.searchParams.set('focus', focusedSwitchIp);
+                else url.searchParams.delete('focus');
+                window.history.pushState({ focus: focusedSwitchIp }, '', url);
+            }
+
+            if (focusedSwitchIp) {
+                btnCpuUsage.classList.add('hidden');
+                btnGlobalLeaderboard.classList.remove('hidden');
+                dashboardTitle.textContent = `Focus: ${focusedSwitchIp}`;
+                sendWs({ type: 'focus_switch', ip: focusedSwitchIp });
+                if (cachedFocusedData.length > 0 && cachedFocusedData[0].switch_ip === focusedSwitchIp) renderLeaderboard(cachedFocusedData);
+                else tbody.innerHTML = '<tr><td colspan="6" class="px-5 py-12 text-center text-gray-500 font-mono">Loading device details...</td></tr>';
+            } else {
+                btnCpuUsage.classList.remove('hidden');
+                btnGlobalLeaderboard.classList.add('hidden');
+                dashboardTitle.textContent = 'Interface Leaderboard';
+                sendWs({ type: 'focus_switch', ip: null });
+                if (cachedGlobalLeaderboard.length > 0) renderLeaderboard(cachedGlobalLeaderboard);
+                else tbody.innerHTML = '<tr><td colspan="6" class="px-5 py-12 text-center text-gray-500 font-mono">Loading data...</td></tr>';
+            }
+        }
+
+        window.addEventListener('popstate', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            setFocus(urlParams.get('focus'), false);
+        });
+
+        btnGlobalLeaderboard.addEventListener('click', (e) => {
+            e.preventDefault();
+            setFocus(null);
+        });
+
         function utilColor(pct) {
             if (pct > 75) return 'bg-red-500';
             if (pct >= 30) return 'bg-yellow-500';
@@ -302,11 +341,7 @@
         }
 
         function escapeHtml(text) {
-            return String(text)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
+            return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
 
         function formatWhole(val) {
@@ -315,10 +350,8 @@
 
         function pollIntervalSelectHtml(selectedValue, extraClass = '') {
             const selected = Number(selectedValue) || 30;
-            const opts = POLL_INTERVAL_OPTS.map(
-                (o) => `<option value="${o.value}"${o.value === selected ? ' selected' : ''}>${o.label}</option>`
-            ).join('');
-            return `<select class="acl-poll-interval ${extraClass} bg-surface-700 border border-surface-600 rounded-lg px-2 py-1.5 text-xs text-gray-100 min-w-[8rem]">${opts}</select>`;
+            const opts = POLL_INTERVAL_OPTS.map(o => `<option value="${o.value}"${o.value === selected ? ' selected' : ''}>${o.label}</option>`).join('');
+            return `<select class="acl-poll-interval ${extraClass} bg-surface-700 border border-surface-600 rounded-lg px-2 py-1 text-xs text-gray-100 min-w-[8rem]">${opts}</select>`;
         }
 
         function bindAclPollIntervalHandlers() {
@@ -334,61 +367,32 @@
             return `${row.switch_ip}|${String(row.ifIndex)}`;
         }
 
-        function dedupeRows(data) {
-            const map = new Map();
-            for (const row of data) {
-                const key = buildRowKey(row);
-                const existing = map.get(key);
-                if (!existing || Number(row.current_util_pct) >= Number(existing.current_util_pct)) {
-                    map.set(key, row);
-                }
-            }
-            return [...map.values()];
-        }
-
         function renderLeaderboard(data) {
-            leaderboardData = dedupeRows(data).sort(
-                (a, b) => Number(b.current_util_pct) - Number(a.current_util_pct)
-            );
-
+            if (!Array.isArray(data)) return;
+            leaderboardData = data.sort((a, b) => Number(b.current_util_pct || 0) - Number(a.current_util_pct || 0));
             rowCountEl.textContent = `(${leaderboardData.length} interface${leaderboardData.length !== 1 ? 's' : ''})`;
-
             if (leaderboardData.length === 0) {
-                tbody.innerHTML = `
-                    <tr id="empty-row">
-                        <td colspan="6" class="px-5 py-12 text-center text-gray-500">
-                            No interface data yet. Ensure switches are reachable via SNMPv2c.
-                        </td>
-                    </tr>`;
+                tbody.innerHTML = '<tr><td colspan="6" class="px-5 py-12 text-center text-gray-500">No active interfaces. Check switch connectivity.</td></tr>';
                 return;
             }
-
             const existingRows = {};
-            tbody.querySelectorAll('tr[data-key]').forEach(tr => {
-                existingRows[tr.dataset.key] = tr;
-            });
-
+            tbody.querySelectorAll('tr[data-key]').forEach(tr => existingRows[tr.dataset.key] = tr);
             const fragment = document.createDocumentFragment();
-
             leaderboardData.forEach((row) => {
                 const key = buildRowKey(row);
                 let tr = existingRows[key];
-
-                if (tr) {
-                    tr.className = 'leaderboard-row transition-all duration-300';
-                    updateRowCells(tr, row);
-                } else {
+                if (tr) updateRowCells(tr, row);
+                else {
                     tr = document.createElement('tr');
                     tr.dataset.key = key;
                     tr.className = 'leaderboard-row transition-all duration-300';
                     tr.innerHTML = rowTemplate(row);
                 }
-
                 fragment.appendChild(tr);
             });
-
             tbody.innerHTML = '';
             tbody.appendChild(fragment);
+            tbody.querySelectorAll('.clickable-ip').forEach(el => el.addEventListener('click', (e) => { e.preventDefault(); setFocus(el.dataset.ip); }));
         }
 
         function rowTemplate(row) {
@@ -398,21 +402,29 @@
             const ifName = escapeHtml(row.ifDescr || '');
             const ifDesc = escapeHtml(row.ifAlias || '');
             const speedClass = row.is_degraded ? 'speed-degraded' : 'text-gray-300';
-            const infoIcon = row.is_degraded ? 
-                `<span class="info-icon" title="This interface is currently operating at ${formatWhole(row.ifHighSpeed)} Mbps, but its hardware name '${ifName}' indicates it should support up to ${formatWhole(row.max_speed)} Mbps. This usually means the port has negotiated a lower speed due to a bad cable, duplex mismatch, or a speed limit configuration on the switch port.">i</span>` : '';
-
+            
+            const debugText = row.debug_info ? `<div class="text-[8px] opacity-70">${row.debug_info}</div>` : '';
+            
+            const infoIcon = row.is_degraded ? `<span class="info-icon" title="Operational mismatch detected. Link should be ${formatWhole(row.max_speed)}Mbps based on its name '${ifName}'.">i</span>` : '';
+            let statusBadge = '';
+            if (focusedSwitchIp) {
+               const st = Number(row.oper_status);
+               const cl = st === 1 ? 'status-up' : 'status-down';
+               statusBadge = `<span class="ml-1 text-[10px] font-bold ${cl}">[${st === 1 ? 'UP' : 'DOWN'}]</span>`;
+            }
             return `
-                <td class="px-4 py-1 font-mono text-accent-glow text-center transition-all duration-300">${escapeHtml(row.switch_ip)}</td>
-                <td class="px-4 py-1 font-mono text-gray-200 text-center transition-all duration-300">${ifName}</td>
-                <td class="px-4 py-1 text-gray-200 text-center descr-cell text-[13px] transition-all duration-300">${ifDesc || '—'}</td>
-                <td class="px-4 py-1 text-center font-mono transition-all duration-300 ${speedClass}">${formatWhole(row.ifHighSpeed)}${infoIcon}</td>
-                <td class="px-4 py-1 text-center font-mono transition-all duration-300">${formatWhole(row.current_bps)}</td>
+                <td class="px-4 py-1 font-mono text-accent-glow text-center transition-all duration-300 clickable-ip text-[13px]" data-ip="${row.switch_ip}">${escapeHtml(row.switch_ip)}</td>
+                <td class="px-4 py-1 font-mono text-gray-200 text-center transition-all duration-300 text-[13px]">${ifName}${statusBadge}</td>
+                <td class="px-4 py-1 text-gray-200 text-center descr-cell text-[12px] transition-all duration-300">${ifDesc || '—'}</td>
+                <td class="px-4 py-1 text-center font-mono transition-all duration-300 text-[13px] ${speedClass}">${formatWhole(row.ifHighSpeed)}${infoIcon}<div class="text-[8px] opacity-70">${row.debug_info || ''}</div></td>
+
+                <td class="px-4 py-1 text-center font-mono transition-all duration-300 text-[13px]">${formatWhole(row.current_bps)}</td>
                 <td class="px-4 py-1 transition-all duration-300">
                     <div class="flex items-center gap-3">
                         <div class="flex-1 h-2 bg-surface-600 rounded-full overflow-hidden">
                             <div class="util-bar h-full rounded-full ${barColor}" style="width: ${barWidth}%"></div>
                         </div>
-                        <span class="w-14 text-right font-mono text-[15px] ${textColor}">${formatWhole(row.current_util_pct)}%</span>
+                        <span class="w-14 text-right font-mono text-[13px] ${textColor}">${formatWhole(row.current_util_pct)}%</span>
                     </div>
                 </td>`;
         }
@@ -420,269 +432,152 @@
         function updateRowCells(tr, row) {
             const cells = tr.children;
             if (cells.length < 6) return;
-
             const barColor = utilColor(row.current_util_pct);
             const textColor = utilTextColor(row.current_util_pct);
             const barWidth = Math.min(Number(row.current_util_pct) || 0, 100);
             const ifName = escapeHtml(row.ifDescr || '');
-
             const speedClass = row.is_degraded ? 'speed-degraded' : 'text-gray-300';
-            const infoIcon = row.is_degraded ? 
-                `<span class="info-icon" title="This interface is currently operating at ${formatWhole(row.ifHighSpeed)} Mbps, but its hardware name '${ifName}' indicates it should support up to ${formatWhole(row.max_speed)} Mbps. This usually means the port has negotiated a lower speed due to a bad cable, duplex mismatch, or a speed limit configuration on the switch port.">i</span>` : '';
-
-            cells[0].className = 'px-4 py-1 font-mono text-accent-glow text-center transition-all duration-300';
+            const infoIcon = row.is_degraded ? `<span class="info-icon" title="Operational mismatch detected. Link should be ${formatWhole(row.max_speed)}Mbps based on its name '${ifName}'.">i</span>` : '';
+            cells[0].className = 'px-4 py-1 font-mono text-accent-glow text-center transition-all duration-300 clickable-ip text-[13px]';
+            cells[0].dataset.ip = row.switch_ip;
             cells[0].textContent = row.switch_ip;
-            cells[1].className = 'px-4 py-1 font-mono text-gray-200 text-center transition-all duration-300';
-            cells[1].textContent = row.ifDescr || '';
-            cells[2].className = 'px-4 py-1 text-gray-200 text-center descr-cell text-[13px] transition-all duration-300';
+            let statusBadge = '';
+            if (focusedSwitchIp) {
+               const st = Number(row.oper_status);
+               const cl = st === 1 ? 'status-up' : 'status-down';
+               statusBadge = `<span class="ml-1 text-[10px] font-bold ${cl}">[${st === 1 ? 'UP' : 'DOWN'}]</span>`;
+            }
+            cells[1].className = 'px-4 py-1 font-mono text-gray-200 text-center transition-all duration-300 text-[13px]';
+            cells[1].innerHTML = `${ifName}${statusBadge}`;
+            cells[2].className = 'px-4 py-1 text-gray-200 text-center descr-cell text-[12px] transition-all duration-300';
             cells[2].textContent = row.ifAlias || '—';
-            cells[3].className = `px-4 py-1 text-center font-mono transition-all duration-300 ${speedClass}`;
+            cells[3].className = `px-4 py-1 text-center font-mono transition-all duration-300 text-[13px] ${speedClass}`;
             cells[3].innerHTML = `${formatWhole(row.ifHighSpeed)}${infoIcon}`;
-            cells[4].className = 'px-4 py-1 text-center font-mono transition-all duration-300';
+            cells[4].className = 'px-4 py-1 text-center font-mono transition-all duration-300 text-[13px]';
             cells[4].textContent = formatWhole(row.current_bps);
-
             cells[5].className = 'px-4 py-1 transition-all duration-300';
             const bar = cells[5].querySelector('.util-bar');
             const pctSpan = cells[5].querySelector('span');
-            if (bar) {
-                bar.className = `util-bar h-full rounded-full ${barColor}`;
-                bar.style.width = `${barWidth}%`;
-            }
-            if (pctSpan) {
-                pctSpan.className = `w-14 text-right font-mono text-[15px] ${textColor}`;
-                pctSpan.textContent = `${formatWhole(row.current_util_pct)}%`;
-            }
+            if (bar) { bar.className = `util-bar h-full rounded-full ${barColor}`; bar.style.width = `${barWidth}%`; }
+            if (pctSpan) { pctSpan.className = `w-14 text-right font-mono text-[13px] ${textColor}`; pctSpan.textContent = `${formatWhole(row.current_util_pct)}%`; }
         }
 
         function handleMessage(event) {
             let msg;
-            try {
-                msg = JSON.parse(event.data);
-            } catch {
-                return;
-            }
-
+            try { msg = JSON.parse(event.data); } catch { return; }
             if (msg.type === 'update') {
-                renderLeaderboard(msg.leaderboard || []);
-
-                if (msg.timestamp) {
-                    const d = new Date(msg.timestamp * 1000);
-                    lastUpdateEl.textContent = d.toLocaleTimeString();
+                if (Array.isArray(msg.leaderboard)) cachedGlobalLeaderboard = msg.leaderboard;
+                if (msg.focused_data) cachedFocusedData = msg.focused_data;
+                if (focusedSwitchIp) {
+                    if (msg.focused_ip === focusedSwitchIp || (msg.focused_data && msg.focused_data.length > 0 && msg.focused_data[0].switch_ip === focusedSwitchIp)) {
+                        renderLeaderboard(msg.focused_data || []);
+                    }
+                } else {
+                    renderLeaderboard(msg.leaderboard || []);
                 }
-
-                if (msg.display_limit !== undefined) {
-                    displaySelect.value = String(msg.display_limit);
-                }
-                if (Array.isArray(msg.monitored_switches)) {
-                    switchAcl = msg.monitored_switches;
-                    renderSwitchAcl();
-                }
-            }
-
-            if (msg.type === 'switch_acl') {
-                if (Array.isArray(msg.monitored_switches)) {
-                    switchAcl = msg.monitored_switches;
-                    renderSwitchAcl();
-                }
-                if (msg.display_limit !== undefined) {
-                    displaySelect.value = String(msg.display_limit);
-                }
-                showAclFeedback(msg.message || '', msg.status === 'error');
+                if (msg.timestamp) lastUpdateEl.textContent = new Date(msg.timestamp * 1000).toLocaleTimeString();
+                if (Array.isArray(msg.monitored_switches)) { switchAcl = msg.monitored_switches; renderSwitchAcl(); }
             }
         }
 
         function renderSwitchAcl() {
-            if (!switchAcl.length) {
-                aclEmpty.classList.remove('hidden');
-                aclTableWrap.classList.add('hidden');
-                aclBody.innerHTML = '';
-                return;
-            }
-            aclEmpty.classList.add('hidden');
-            aclTableWrap.classList.remove('hidden');
+            if (!switchAcl.length) { aclEmpty.classList.remove('hidden'); aclTableWrap.classList.add('hidden'); aclBody.innerHTML = ''; return; }
+            aclEmpty.classList.add('hidden'); aclTableWrap.classList.remove('hidden');
             aclBody.innerHTML = switchAcl.map(sw => {
                 const interval = sw.polling_interval != null ? sw.polling_interval : 30;
                 return `
                 <tr data-ip="${escapeHtml(sw.ip)}">
-                    <td class="px-3 py-2 font-mono text-accent-glow">${escapeHtml(sw.ip)}</td>
-                    <td class="px-3 py-2 font-mono text-gray-300">${escapeHtml(sw.community)}</td>
-                    <td class="px-3 py-2">${pollIntervalSelectHtml(interval, 'w-full')}</td>
-                    <td class="px-3 py-2 text-right">
-                        <button type="button" class="btn-remove-switch text-xs text-red-400 hover:text-red-300 transition-colors"
-                                data-ip="${escapeHtml(sw.ip)}">Remove</button>
+                    <td class="px-3 py-1 font-mono text-accent-glow clickable-ip text-[13px]" data-ip="${escapeHtml(sw.ip)}">${escapeHtml(sw.ip)}</td>
+                    <td class="px-3 py-1 font-mono text-gray-300 text-[13px]">${escapeHtml(sw.community)}</td>
+                    <td class="px-3 py-1">${pollIntervalSelectHtml(interval, 'w-full')}</td>
+                    <td class="px-3 py-1 text-right">
+                        <button type="button" class="btn-remove-switch text-xs text-red-400 hover:text-red-300 transition-colors" data-ip="${escapeHtml(sw.ip)}">Remove</button>
                     </td>
                 </tr>`;
             }).join('');
+            aclBody.querySelectorAll('.clickable-ip').forEach(el => el.addEventListener('click', (e) => { e.preventDefault(); setFocus(el.dataset.ip); }));
             aclBody.querySelectorAll('tr[data-ip]').forEach(tr => {
                 const ip = tr.dataset.ip;
                 const sel = tr.querySelector('.acl-poll-interval');
                 if (sel && ip) sel.dataset.ip = ip;
             });
-            aclBody.querySelectorAll('.btn-remove-switch').forEach(btn => {
-                btn.addEventListener('click', () => removeSwitch(btn.dataset.ip));
-            });
+            aclBody.querySelectorAll('.btn-remove-switch').forEach(btn => btn.addEventListener('click', () => removeSwitch(btn.dataset.ip)));
             bindAclPollIntervalHandlers();
         }
 
         function showAclFeedback(message, isError = false) {
-            if (!message) {
-                aclFeedback.classList.add('hidden');
-                return;
-            }
+            if (!message) { aclFeedback.classList.add('hidden'); return; }
             aclFeedback.textContent = message;
             aclFeedback.className = `mt-3 text-xs text-center transition-all duration-300 ${isError ? 'text-red-400' : 'text-green-400'}`;
             aclFeedback.classList.remove('hidden');
             setTimeout(() => aclFeedback.classList.add('hidden'), 3500);
         }
 
-        function openAddModal() {
-            modalError.classList.add('hidden');
-            addSwitchForm.reset();
-            newSwitchPolling.value = '30';
-            addSwitchModal.classList.remove('hidden');
-            addSwitchModal.classList.add('flex');
-            newSwitchIp.focus();
-        }
-
-        function closeAddModal() {
-            addSwitchModal.classList.add('hidden');
-            addSwitchModal.classList.remove('flex');
-        }
+        function openAddModal() { modalError.classList.add('hidden'); addSwitchForm.reset(); addSwitchModal.classList.remove('hidden'); addSwitchModal.classList.add('flex'); newSwitchIp.focus(); }
+        function closeAddModal() { addSwitchModal.classList.add('hidden'); addSwitchModal.classList.remove('flex'); }
 
         async function updateSwitchPollingInterval(ip, pollingInterval) {
             try {
-                const res = await fetch('/api/switches/polling-interval', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ip, polling_interval: pollingInterval }),
-                });
+                const res = await fetch('/api/switches/polling-interval', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip, polling_interval: pollingInterval }) });
                 const data = await res.json();
-                if (Array.isArray(data.monitored_switches)) {
-                    switchAcl = data.monitored_switches;
-                    renderSwitchAcl();
-                }
+                if (Array.isArray(data.monitored_switches)) { switchAcl = data.monitored_switches; renderSwitchAcl(); }
                 showAclFeedback(data.message || '', data.status === 'error');
-            } catch {
-                showAclFeedback('Failed to update poll interval.', true);
-            }
+            } catch { showAclFeedback('Failed to update poll interval.', true); }
         }
 
         async function addSwitch(ip, community, pollingInterval) {
             try {
-                const res = await fetch('/api/switches/add', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        ip: ip.trim(),
-                        community: community.trim(),
-                        polling_interval: pollingInterval,
-                    }),
-                });
+                const res = await fetch('/api/switches/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip: ip.trim(), community: community.trim(), polling_interval: pollingInterval }) });
                 const data = await res.json();
-                if (data.status === 'ok') {
-                    closeAddModal();
-                }
-                if (Array.isArray(data.monitored_switches)) {
-                    switchAcl = data.monitored_switches;
-                    renderSwitchAcl();
-                }
+                if (data.status === 'ok') closeAddModal();
+                if (Array.isArray(data.monitored_switches)) { switchAcl = data.monitored_switches; renderSwitchAcl(); }
                 showAclFeedback(data.message || '', data.status === 'error');
-            } catch {
-                showAclFeedback('Failed to add switch.', true);
-            }
+            } catch { showAclFeedback('Failed to add switch.', true); }
         }
 
         async function removeSwitch(ip) {
-            if (!confirm(`Remove ${ip} from the SNMP access list?`)) return;
-
+            if (!confirm(`Remove ${ip}?`)) return;
             try {
-                const res = await fetch('/api/switches/remove', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ ip }),
-                });
+                const res = await fetch('/api/switches/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ip }) });
                 const data = await res.json();
-                if (Array.isArray(data.monitored_switches)) {
-                    switchAcl = data.monitored_switches;
-                    renderSwitchAcl();
-                }
+                if (Array.isArray(data.monitored_switches)) { switchAcl = data.monitored_switches; renderSwitchAcl(); }
                 showAclFeedback(data.message || '', data.status === 'error');
-            } catch {
-                showAclFeedback('Failed to remove switch.', true);
-            }
+            } catch { showAclFeedback('Failed to remove switch.', true); }
         }
 
         function connectWebSocket() {
-            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-                return;
-            }
-
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
             setWsStatus('connecting', 'Connecting…');
-            ws = new WebSocket(WS_URL);
-
-            ws.onopen = () => {
-                setWsStatus('connected', 'Live');
-                if (reconnectTimer) {
-                    clearTimeout(reconnectTimer);
-                    reconnectTimer = null;
-                }
-            };
-
+            const urlParams = new URLSearchParams(window.location.search);
+            const focus = urlParams.get('focus');
+            const wsUrl = new URL(WS_URL);
+            if (focus) wsUrl.searchParams.set('focus', focus);
+            ws = new WebSocket(wsUrl.toString());
+            ws.onopen = () => { setWsStatus('connected', 'Live'); if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } if (focusedSwitchIp) sendWs({ type: 'focus_switch', ip: focusedSwitchIp }); };
             ws.onmessage = handleMessage;
-
-            ws.onclose = () => {
-                setWsStatus('disconnected', 'Disconnected');
-                ws = null;
-                reconnectTimer = setTimeout(connectWebSocket, 3000);
-            };
-
-            ws.onerror = () => {
-                ws?.close();
-            };
+            ws.onclose = () => { setWsStatus('disconnected', 'Disconnected'); ws = null; reconnectTimer = setTimeout(connectWebSocket, 3000); };
+            ws.onerror = () => ws?.close();
         }
 
-        function sendWs(payload) {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify(payload));
-            }
-        }
+        function sendWs(payload) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload)); }
 
         document.getElementById('btn-add-switch').addEventListener('click', openAddModal);
         document.getElementById('btn-modal-cancel').addEventListener('click', closeAddModal);
-        addSwitchModal.addEventListener('click', (e) => {
-            if (e.target === addSwitchModal) closeAddModal();
-        });
-
+        addSwitchModal.addEventListener('click', (e) => { if (e.target === addSwitchModal) closeAddModal(); });
         addSwitchForm.addEventListener('submit', (e) => {
             e.preventDefault();
-            modalError.classList.add('hidden');
             const ip = newSwitchIp.value.trim();
-            const community = newSwitchCommunity.value.trim();
-            const pollingInterval = parseInt(newSwitchPolling.value, 10);
-            if (!ip || !community) {
-                modalError.textContent = 'IPv4 address and community are required.';
-                modalError.classList.remove('hidden');
-                return;
-            }
-            addSwitch(ip, community, pollingInterval);
+            const comm = newSwitchCommunity.value.trim();
+            const pol = parseInt(newSwitchPolling.value, 10);
+            if (!ip || !comm) return;
+            addSwitch(ip, comm, pol);
         });
-
-        aclBody.querySelectorAll('.btn-remove-switch').forEach(btn => {
-            btn.addEventListener('click', () => removeSwitch(btn.dataset.ip));
-        });
-
-        displaySelect.addEventListener('change', () => {
-            const value = parseInt(displaySelect.value, 10);
-            fetch('/api/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ display_limit: value }),
-            }).catch(() => {});
-        });
-
-        bindAclPollIntervalHandlers();
+        displaySelect.addEventListener('change', () => { fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ display_limit: parseInt(displaySelect.value, 10) }) }).catch(() => {}); });
         renderSwitchAcl();
         connectWebSocket();
+        const urlParams = new URLSearchParams(window.location.search);
+        const focusIp = urlParams.get('focus');
+        if (focusIp) setFocus(focusIp);
     })();
     </script>
 </body>

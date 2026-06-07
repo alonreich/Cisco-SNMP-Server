@@ -37,6 +37,15 @@
         .leaderboard-table td {
             border: 1px solid #000000;
         }
+        .clickable-ip {
+            cursor: pointer;
+            text-decoration: underline;
+            text-decoration-style: dotted;
+            text-underline-offset: 3px;
+        }
+        .clickable-ip:hover {
+            color: #60a5fa !important;
+        }
     </style>
 </head>
 <body class="h-full bg-surface-900 text-gray-100 antialiased">
@@ -73,7 +82,7 @@
             <div class="overflow-x-auto p-1">
                 <table class="leaderboard-table w-full text-[12px]">
                     <thead>
-                        <tr class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider bg-surface-700/50">
+                        <tr class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider bg-surface-700/50">
                             <th class="px-4 py-1.5 text-center">Switch IP</th>
                             <th class="px-4 py-1.5 text-center min-w-[12rem]">CPU (%)</th>
                         </tr>
@@ -111,9 +120,9 @@
             </div>
 
             <div class="overflow-x-auto mb-4 {% if not monitored_switches %}hidden{% endif %}" id="acl-table-wrap">
-                <table class="w-full text-[15px]">
+                <table class="w-full text-[16px]">
                     <thead>
-                        <tr class="text-left text-[13px] font-semibold text-gray-400 uppercase tracking-wider border-b border-surface-600">
+                        <tr class="text-left text-[14px] font-semibold text-gray-400 uppercase tracking-wider border-b border-surface-600">
                             <th class="px-3 py-1">IPv4 Address</th>
                             <th class="px-3 py-1">SNMPv2c Community (RO)</th>
                             <th class="px-3 py-1">Poll Interval</th>
@@ -123,8 +132,8 @@
                     <tbody id="switch-acl-body" class="divide-y divide-surface-600">
                         {% for sw in monitored_switches %}
                         <tr data-ip="{{ sw.ip }}">
-                            <td class="px-3 py-1 font-mono text-accent-glow">{{ sw.ip }}</td>
-                            <td class="px-3 py-1 font-mono text-gray-300">{{ sw.community }}</td>
+                            <td class="px-3 py-1 font-mono text-accent-glow clickable-ip" data-ip="{{ sw.ip }}">{{ sw.ip }}</td>
+                            <td class="px-3 py-1 font-mono text-gray-300 text-[16px]">{{ sw.community }}</td>
                             <td class="px-3 py-1">
                                 <select class="acl-poll-interval w-full min-w-[8rem] bg-surface-700 border border-surface-600 rounded-lg px-2 py-1 text-xs text-gray-100"
                                         data-ip="{{ sw.ip }}">
@@ -202,6 +211,7 @@
         const aclTableWrap = document.getElementById('acl-table-wrap');
         const aclFeedback = document.getElementById('acl-feedback');
         const addSwitchModal = document.getElementById('add-switch-modal');
+        const addSwitchForm = document.getElementById('add-switch-form');
 
         const POLL_INTERVAL_OPTS = [
             { value: 5, label: '5 seconds' },
@@ -251,13 +261,14 @@
                 const textColor = utilTextColor(row.cpu_usage);
                 return `
                 <tr class="leaderboard-row">
-                    <td class="px-4 py-2 font-mono text-accent-glow text-center border border-black">${row.switch_ip}</td>
+                    <td class="px-4 py-2 font-mono text-accent-glow text-center border border-black cursor-pointer hover:text-accent-glow/70 underline underline-offset-4 decoration-dotted text-[16px]" 
+                        onclick="location.href='/?focus=${row.switch_ip}'">${row.switch_ip}</td>
                     <td class="px-4 py-2 border border-black">
                         <div class="flex items-center gap-3">
                             <div class="flex-1 h-2 bg-surface-600 rounded-full overflow-hidden">
                                 <div class="h-full rounded-full ${barColor}" style="width: ${row.cpu_usage}%"></div>
                             </div>
-                            <span class="w-14 text-right font-mono text-[13px] ${textColor}">${row.cpu_usage}%</span>
+                            <span class="w-14 text-right font-mono text-[16px] ${textColor}">${row.cpu_usage}%</span>
                         </div>
                     </td>
                 </tr>`;
@@ -296,8 +307,8 @@
                 const interval = sw.polling_interval != null ? sw.polling_interval : 30;
                 return `
                 <tr data-ip="${escapeHtml(sw.ip)}">
-                    <td class="px-3 py-1 font-mono text-accent-glow">${escapeHtml(sw.ip)}</td>
-                    <td class="px-3 py-1 font-mono text-gray-300">${escapeHtml(sw.community)}</td>
+                    <td class="px-3 py-1 font-mono text-accent-glow clickable-ip" data-ip="${escapeHtml(sw.ip)}">${escapeHtml(sw.ip)}</td>
+                    <td class="px-3 py-1 font-mono text-gray-300 text-[16px]">${escapeHtml(sw.community)}</td>
                     <td class="px-3 py-1">${pollIntervalSelectHtml(interval, 'w-full')}</td>
                     <td class="px-3 py-1 text-right">
                         <button type="button" class="btn-remove-switch text-xs text-red-400 hover:text-red-300 transition-colors"
@@ -305,6 +316,13 @@
                     </td>
                 </tr>`;
             }).join('');
+
+            aclBody.querySelectorAll('.clickable-ip').forEach(el => {
+                el.addEventListener('click', () => {
+                    location.href=`/?focus=${el.dataset.ip}`;
+                });
+            });
+
             aclBody.querySelectorAll('tr[data-ip]').forEach(tr => {
                 const ip = tr.dataset.ip;
                 const sel = tr.querySelector('.acl-poll-interval');
