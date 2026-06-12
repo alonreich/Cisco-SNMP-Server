@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block title %}CPU Intelligence — SNMP Master{% endblock %}
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="bg-surface-800 rounded-2xl border border-surface-700 shadow-2xl p-6 mb-8">
+    <div class="flex flex-wrap items-center justify-between gap-6 mb-8">
+        <div class="flex items-center gap-4">
+            <div class="p-2 bg-accent/10 rounded-xl">
+                <i class="fas fa-microchip text-accent text-base"></i>
+            </div>
+            <div>
+                <h2 class="text-sm font-bold text-white uppercase tracking-widest">CPU <span class="text-blue-300">Intelligence</span></h2>
+                <p class="text-[10px] text-slate-400 uppercase font-bold tracking-widest mt-0.5">Real-time Processor Load Analysis</p>
+            </div>
+        </div>
+        
+        <div class="flex items-center gap-4">
+            <div class="relative">
+                <i class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
+                <input type="text" id="device_search" placeholder="Filter devices..." 
+                       class="w-56 pl-10 bg-surface-900 border border-surface-700 rounded-xl px-4 py-2 text-sm text-white focus:ring-2 focus:ring-accent/40" 
+                       oninput="filterDeviceSelect()" aria-label="Search device">
+            </div>
+            <select id="device_select" aria-label="Select device to monitor" 
+                    class="w-64 bg-surface-900 border border-surface-700 rounded-xl px-4 py-2 text-sm text-white"
+                    onchange="loadCpuData()">
+                {% for ip, device in devices.items() %}
+                {% if device.target_type != 'vmware' %}
+                <option value="{{ ip }}" data-hostname="{{ device.hostname }}">{{ device.hostname or ip }} (${{ ip }})</option>
+                {% endif %}
+                {% endfor %}
+            </select>
+            <button onclick="exportCSV()" class="btn btn-secondary text-xs uppercase font-bold py-2 px-5" aria-label="Export CPU data as CSV">
+                <i class="fas fa-download mr-2 opacity-60"></i> Export Dataset
+            </button>
+        </div>
+    </div>
+
+    <!-- Time ranges -->
+    <div class="flex items-center gap-3 mb-8" role="group" aria-label="Time range selection">
+        <span class="text-xs font-bold text-slate-500 uppercase tracking-widest mr-2">Time Window:</span>
+        <button onclick="setRange(1)" class="btn btn-secondary text-xs range-btn ring-2 ring-accent" aria-pressed="true">1 Hour</button>
+        <button onclick="setRange(6)" class="btn btn-secondary text-xs range-btn" aria-pressed="false">6 Hours</button>
+        <button onclick="setRange(24)" class="btn btn-secondary text-xs range-btn" aria-pressed="false">24 Hours</button>
+        <button onclick="setRange(168)" class="btn btn-secondary text-xs range-btn" aria-pressed="false">7 Days</button>
+    </div>
+
+    <!-- Stats panel -->
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+        <div class="bg-surface-900 rounded-2xl border border-surface-700 p-5 text-center shadow-inner">
+            <div id="current_cpu" class="text-3xl font-black text-slate-400">--</div>
+            <div class="text-[10px] text-slate-500 uppercase font-black tracking-widest mt-2">Current Utilization</div>
+        </div>
+        <div class="bg-surface-900 rounded-2xl border border-surface-700 p-5 text-center shadow-inner">
+            <div id="avg_cpu" class="text-xl font-bold text-slate-300">--</div>
+            <div class="text-[10px] text-slate-500 uppercase font-bold tracking-widest mt-2">Window Average</div>
+        </div>
+        <div class="bg-surface-900 rounded-2xl border border-surface-700 p-5 text-center shadow-inner">
+            <div id="max_cpu" class="text-xl font-bold text-slate-300">--</div>
+            <div class="text-[10px] text-slate-500 uppercase font-bold tracking-widest mt-2">Peak Observed</div>
+        </div>
+        <div class="bg-surface-900 rounded-2xl border border-surface-700 p-5 text-center shadow-inner">
+            <div id="min_cpu" class="text-xl font-bold text-slate-300">--</div>
+            <div class="text-[10px] text-slate-500 uppercase font-bold tracking-widest mt-2">Floor Observed</div>
+        </div>
+        <div class="bg-surface-900 rounded-2xl border border-surface-700 p-5 text-center shadow-inner">
+            <div id="samples" class="text-xl font-bold text-slate-300">--</div>
+            <div class="text-[10px] text-slate-500 uppercase font-bold tracking-widest mt-2">Data Samples</div>
+        </div>
+    </div>
+
+    <!-- Chart -->
+    <div class="bg-surface-900 rounded-2xl border border-surface-700 p-6 shadow-inner" style="height: 420px;">
+        <canvas id="cpu_chart"></canvas>
+    </div>
+
+    <!-- No data notice -->
+    <div id="no_data_notice" class="hidden mt-6 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-xl">
+        <p class="text-xs text-yellow-400 font-bold leading-relaxed">
+            <i class="fas fa-exclamation-triangle mr-2"></i> TELEMETRY GAP: No processor data available for this target. Note that CPU monitoring requires Cisco-specific OIDs (cpmCPUTotalMonTable) — non-Cisco infrastructure (ESXi, VCSA) will not populate these metrics.
+        </p>
+    </div>
+</div>
+
+<!-- Alert History -->
+<div class="bg-surface-800 rounded-2xl border border-surface-700 shadow-2xl p-6">
+    <div class="flex items-center gap-3 mb-4">
+        <i class="fas fa-bell text-red-400 text-xs"></i>
+        <h3 class="text-xs font-bold text-slate-200 uppercase tracking-widest">Recent Processor Anomalies</h3>
+    </div>
+    <div id="alert_list" class="space-y-2 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
+        <p class="text-sm text-slate-500 italic">No critical anomalies detected in the current window.</p>
+    </div>
+</div>
+
+<script>
+let currentRange = 1;
+let cpuChart = null;
+const warningThreshold = {{ config.get('alerts', {}).get('cpu_warning', 70) }};
+const criticalThreshold = {{ config.get('alerts', {}).get('cpu_critical', 90) }};
+
+function filterDeviceSelect() {
+    const search = document.getElementById('device_search').value.toLowerCase();
+    const sel = document.getElementById('device_select');
+    for (let opt of sel.options) {
+        const match = opt.textContent.toLowerCase().includes(search) || opt.value.includes(search);
+        opt.style.display = match ? '' : 'none';
+    }
+}
+
+function setRange(hours) {
+    currentRange = hours;
+    document.querySelectorAll('.range-btn').forEach(b => {
+        b.classList.remove('ring-2', 'ring-accent');
+        b.setAttribute('aria-pressed', 'false');
+    });
+    const active = document.querySelector(`.range-btn[onclick="setRange(${hours})"]`);
+    if (active) {
+        active.classList.add('ring-2', 'ring-accent');
+        active.setAttribute('aria-pressed', 'true');
+    }
+    loadCpuData();
+}
+
+function loadCpuData() {
+    const ip = document.getElementById('device_select').value;
+    const noDataNotice = document.getElementById('no_data_notice');
+
+    fetch(`/api/device/${encodeURIComponent(ip)}/history?metric=cpu&hours=${currentRange}`)
+        .then(r => r.json())
+        .then(result => {
+            const data = result.data || [];
+            if (data.length === 0) {
+                document.getElementById('current_cpu').textContent = 'N/A';
+                document.getElementById('avg_cpu').textContent = '--';
+                document.getElementById('max_cpu').textContent = '--';
+                document.getElementById('min_cpu').textContent = '--';
+                document.getElementById('samples').textContent = '0';
+                noDataNotice.classList.remove('hidden');
+                if (cpuChart) { cpuChart.destroy(); cpuChart = null; }
+                return;
+            }
+            noDataNotice.classList.add('hidden');
+
+            const labels = data.map(d => d[0].substring(11, 19));
+            const values = data.map(d => d[1]);
+
+            const cur = values[values.length - 1];
+            const el = document.getElementById('current_cpu');
+            el.textContent = cur.toFixed(1) + '%';
+            el.className = 'text-3xl font-black ' + (cur >= criticalThreshold ? 'text-red-400' : cur >= warningThreshold ? 'text-yellow-400' : 'text-green-400');
+
+            document.getElementById('min_cpu').textContent = Math.min(...values).toFixed(1) + '%';
+            document.getElementById('max_cpu').textContent = Math.max(...values).toFixed(1) + '%';
+            document.getElementById('avg_cpu').textContent = (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) + '%';
+            document.getElementById('samples').textContent = values.length;
+
+            if (cpuChart) cpuChart.destroy();
+            const ctx = document.getElementById('cpu_chart').getContext('2d');
+            cpuChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'CPU Load %',
+                        data: values,
+                        borderColor: '#3b82f6',
+                        backgroundColor: (ctx2) => {
+                            const g = ctx2.chart.ctx.createLinearGradient(0, 0, 0, 400);
+                            g.addColorStop(0, 'rgba(59,130,246,0.3)');
+                            g.addColorStop(1, 'rgba(59,130,246,0.01)');
+                            return g;
+                        },
+                        fill: true, tension: 0.4, pointRadius: 0, borderWidth: 3
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: {
+                        x: { ticks: { color: '#94a3b8', maxTicksLimit: 12, font: { size: 11, weight: 'bold' } }, grid: { color: 'rgba(71,85,105,0.3)' } },
+                        y: { min: 0, max: 100, ticks: { color: '#94a3b8', font: { size: 11, weight: 'bold' } }, grid: { color: 'rgba(71,85,105,0.3)' } }
+                    },
+                    plugins: {
+                        legend: { labels: { color: '#f1f5f9', font: { size: 12, weight: 'bold' } } },
+                        annotation: {
+                            annotations: {
+                                warningLine: { type: 'line', yMin: warningThreshold, yMax: warningThreshold,
+                                    borderColor: '#eab308cc', borderWidth: 2, borderDash: [8,4],
+                                    label: { display: true, content: `WARN: ${warningThreshold}%`, position: 'start', backgroundColor: '#eab308', color: '#000', font: { size: 10, weight: 'bold' } } },
+                                criticalLine: { type: 'line', yMin: criticalThreshold, yMax: criticalThreshold,
+                                    borderColor: '#ef4444cc', borderWidth: 2, borderDash: [8,4],
+                                    label: { display: true, content: `CRIT: ${criticalThreshold}%`, position: 'start', backgroundColor: '#ef4444', color: '#fff', font: { size: 10, weight: 'bold' } } }
+                            }
+                        }
+                    }
+                }
+            });
+        })
+        .catch(err => {
+            console.error('CPU fetch error:', err);
+            document.getElementById('current_cpu').textContent = 'ERR';
+        });
+
+    // Load alerts
+    fetch(`/api/alerts?ip=${encodeURIComponent(ip)}&limit=20`).then(r => r.json()).then(data => {
+        const list = document.getElementById('alert_list');
+        const alerts = (data.alerts || []).filter(a => a.alert_type && a.alert_type.startsWith('cpu'));
+        if (alerts.length === 0) { list.innerHTML = '<p class="text-sm text-slate-500 italic">No processor anomalies detected in the current window.</p>'; return; }
+        list.innerHTML = alerts.map(a =>
+            `<div class="text-sm p-4 rounded-xl shadow-sm ${a.severity === 'critical' ? 'bg-red-500/10 text-red-200 border border-red-500/20' : 'bg-yellow-500/10 text-yellow-200 border border-yellow-500/20'}">
+                <span class="font-mono text-slate-500 font-bold mr-3">${escapeHtml(a.timestamp ? a.timestamp.substring(11, 19) : '')}</span> ${escapeHtml(a.message)}
+            </div>`
+        ).join('');
+    });
+}
+
+function exportCSV() {
+    const ip = document.getElementById('device_select').value;
+    fetch(`/api/device/${encodeURIComponent(ip)}/history?metric=cpu&hours=${currentRange}`)
+        .then(r => r.json())
+        .then(result => {
+            const data = result.data || [];
+            if (data.length === 0) { alert('No data to export'); return; }
+            let csv = 'Timestamp,CPU %\n';
+            data.forEach(d => csv += `${d[0]},${d[1]}\n`);
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = `cpu_${ip}_${currentRange}h.csv`; a.click();
+            URL.revokeObjectURL(url);
+        });
+}
+
+document.addEventListener('DOMContentLoaded', loadCpuData);
+setInterval(loadCpuData, 30000);
+socket.on('device_update', () => loadCpuData());
+</script>
+{% endblock %}

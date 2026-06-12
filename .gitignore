@@ -34,3 +34,6 @@ config.json
 *.swp
 Thumbs.db
 Desktop.ini
+
+openclaw/
+tmp/

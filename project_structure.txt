@@ -1,99 +1,96 @@
 ================================================================================
-  SNMP-SERVER — PROJECT STRUCTURE & ARCHITECTURE REFERENCE
+  CISCO SNMP MASTER — THE DEFINITIVE TECHNICAL MANIFESTO (V4.0)
 ================================================================================
-  Stack:          Python 3.11–3.14 | FastAPI | Uvicorn | PySNMP
-  Frontend:       HTML5 + Tailwind CSS (CDN) + Vanilla ES6
-  Platform:       Windows Server / Windows 10+
-  Last updated:   June 2026
-================================================================================
+  Updated: Friday, June 12, 2026
+  Status: Production-Grade NMS (ZERO-CACHE ARCHITECTURE)
+  Primary Stack: Python 3.14, Flask, SocketIO, Eventlet, SQLite, vis.js, Tailwind
 
---------------------------------------------------------------------------------
-1. PROJECT GOALS
---------------------------------------------------------------------------------
-- Deliver a dual-view monitoring dashboard (Bandwidth & CPU) for Cisco switches.
-- Provide a sorted interface leaderboard and a per-switch CPU utilization view.
-- Support per-switch polling intervals (5s to 1h) and dynamic device management.
-- Enforce a strict zero-cache policy for clean, reliable operation on Windows Server.
-- Maintain a zero-dependency frontend (no build step) for maximum portability.
+────────────────────────────────────────────────────────────────────────────────
+  1. CORE ARCHITECTURAL PRINCIPLE: THE ZERO-CACHE MANDATE
+────────────────────────────────────────────────────────────────────────────────
+  This system is engineered for absolute real-time accuracy. Caching at any 
+  layer (Filesystem, Python Bytecode, Memory, or Browser) is strictly forbidden.
 
---------------------------------------------------------------------------------
-2. PROJECT ARCHITECTURE
---------------------------------------------------------------------------------
-The project uses an async, single-process architecture built with FastAPI.
+  ENFORCEMENT MECHANISMS:
+  • Bytecode Suppression: 'sys.dont_write_bytecode = True' and 
+    'set PYTHONDONTWRITEBYTECODE=1' are mandatory across all layers.
+  • Memory Integrity: Data MUST NOT be stored in global variables or local 
+    dictionaries. Every broadcast/request MUST trigger a direct SQLite read.
+  • Browser Cache Busting: 'Cache-Control: no-store' headers are injected 
+    into every HTTP response via the '@app.after_request' hook.
+  • Process Isolation: 'master.py' and 'main.py' run in completely detached 
+    background scopes via VBScript wrappers to prevent console host binding.
 
-- **Entry Point**: `master.py` (via `master.bat`) initializes the environment and starts the server.
-- **Backend (FastAPI)**: `main.py` handles the web server, WebSocket broadcasting, and SNMP workers.
-- **Polling Worker**: Async loops that poll each switch independently based on its specific interval.
-- **Data Store**: `GLOBAL_STATE` stores current metrics for interfaces and CPU usage.
-- **Persistence**: `config.json` retains monitored switches and dashboard settings.
-- **Frontend**: 
-    - `templates/index.html`: Main bandwidth dashboard.
-    - `templates/cpu.html`: Dedicated CPU utilization dashboard.
-- **Communication**: WebSockets stream unified updates (Bandwidth + CPU) to all clients.
+────────────────────────────────────────────────────────────────────────────────
+  2. DATA PROCESSING PIPELINE (SNMP ➔ DB ➔ WS ➔ UI)
+────────────────────────────────────────────────────────────────────────────────
+  A. THE ENGINE (master.py):
+     • Technology: Asyncio + modern 'pysnmp' v7 (v3arch).
+     • Interval: 30-second cycles.
+     • Logic: Parallel polling of all 'monitored_switches' in config.json.
+     • Key OIDs:
+       - CPU Load: 1.3.6.1.4.1.9.9.109.1.1.1.1.8 (Cisco 5min Avg)
+       - Interfaces: .1.3.6.1.2.1.2.2.1 (Standard MIB-II)
+       - Throughput: 1.3.6.1.2.1.31.1.1.1.6 (HC In) / .10 (HC Out)
+       - Topology: 1.0.8802.1.1.2.1.4.1.1.9 (LLDP) / 1.3.6.1.4.1.9.9.23.1.2.1.1.6 (CDP)
+       - Memory: 1.3.6.1.4.1.9.9.48.1.1.1 (Cisco Memory Pool)
 
---------------------------------------------------------------------------------
-3. DEPENDENCIES REQUIRED
---------------------------------------------------------------------------------
-- **FastAPI**: Web framework.
-- **Uvicorn[standard]**: ASGI server.
-- **PySNMP**: Protocol implementation (v6/v7 based on Python version).
+  B. THE PERSISTENCE (database/history_db.py):
+     • Schema:
+       - [devices]: IP, Hostname, sys_descr, Status, last_seen.
+       - [interface_history]: in/out octets (raw 64-bit counters), speed, admin/oper.
+       - [cpu_history] / [memory_history]: Time-series telemetry.
+       - [topology]: neighbor relationships (local_port ➔ remote_id/port).
+     • Maintenance: Automatic FIFO trimming (Size capped at 20MB via VACUUM).
 
-**Setup Command**:
-```cmd
-install.bat
-```
+  C. THE BROADCASTER (main.py):
+     • Technology: Flask + Socket.IO (Eventlet async_mode).
+     • Background Loop: Wakes up every 15s.
+     • Metrics Calculation: Computes Delta bps: ((curr - prev) * 8) / (dt * 10^6).
+     • Event: socketio.emit('device_update', { devices, leaderboard })
 
---------------------------------------------------------------------------------
-4. FEATURE SPECIFICATIONS
---------------------------------------------------------------------------------
+────────────────────────────────────────────────────────────────────────────────
+  3. DASHBOARD UI/UX SPECIFICATION (THE PERFECT STATE)
+────────────────────────────────────────────────────────────────────────────────
+  The Dashboard Interface Leaderboard is a rigid, high-density 1px black grid.
 
-### Feature: Real-Time Interface Leaderboard
-- **Logic**: Calculates Mbps delta and utilization percentage.
-- **Filtering**: Automatically hides "Down/Down" ports and idle ( < 0.5 Mbps) interfaces.
-- **UI**: Sorted table with color-coded bars (Green < 30%, Yellow 30-75%, Red > 75%).
+  VISUAL STANDARDS:
+  • Theme: Deep Slate 700 (#334155). Text: Slate 100 (#f1f5f9).
+  • Grid: 'border-collapse: collapse;' with '1px solid black' on all cells.
+  • Spacing: Global py-4 padding. Table headers are compressed (py-2).
 
-### Feature: CPU Usage Dashboard
-- **URL**: `/cpu`
-- **Logic**: Polls Cisco `cpmCPUTotal5minRev` OID.
-- **UI**: Optimized thresholds: Green (0-25%), Yellow (26-65%), Red (66-100%).
-- **Navigation**: Dedicated button with 60px separation from data legend.
+  LEADERBOARD COLUMN ARCHITECTURE (STRICT):
+  1. [DEVICE] (110px-150px): 
+     - Data: Management IP (bold, text-sm) + (TYPE) in 8px grey font.
+     - Action: Clicking triggers an ALPHABETICAL drill-down of all interfaces.
+  2. [INTERFACE] (180px fixed): 
+     - Names: Shortened shorthand (Gi, Fa, Te, Po, Vl, Lo, Tu).
+     - Alignment: Perfectly centered and middle-aligned (vertical/horizontal).
+     - Wrapping: Max 3 lines before truncation.
+  3. [DESCRIPTION] (120px-300px): 
+     - Natural expansion up to 300px before line wrap.
+  4. [SPEED] (100px fixed): 
+     - Format: '100mb', '1gb', '10gb'. Red if descr/speed mismatch found.
+  5. [TRAFFIC (mbps)] (100px fixed): 
+     - Header: Lowercase 'mbps'.
+     - Markers: Green (↓In) and Blue (↑Out). Shifted -12px left for balance.
+  6. [UTILIZATION] (16rem min): 
+     - Triple-threshold color bars (Green <30%, Yellow <75%, Red >75%).
 
-### Feature: Switch Focus Mode (Deep-Dive)
-- **Goal**: Allow operators to inspect all physical ports of a single device.
-- **Logic**: 
-    1. Click any Switch IP in the leaderboard or access list.
-    2. Switches from "Top N Active" view to "Single Device Comprehensive" view.
-    3. Displays **ALL** interfaces (Up, Down, and Idle) for that switch.
-    4. Sorted by traffic (highest to lowest).
-- **UI**: 
-    1. Clickable IP links in all tables.
-    2. Focus title: `Focus: [IP Address]`.
-    3. Status badges `[UP]` / `[DOWN]` shown next to interface names in focus mode.
-    4. Navigation: "Global Leaderboard" button appears to return to multi-switch view; "CPU Usage" is hidden.
+────────────────────────────────────────────────────────────────────────────────
+  4. OPERATIONAL INFRASTRUCTURE
+────────────────────────────────────────────────────────────────────────────────
+  • LAUNCHERS: 
+    - main_background.vbs / master_background.vbs: Hidden window (Style 0).
+  • RESTART PROTOCOL (restart_server.bat):
+    1. Force-kill all 'python.exe' via PowerShell (Stop-Process -Force).
+    2. Wait 2s for OS to release file locks on logs.
+    3. Clear/Delete stale logs in /logs folder.
+    4. Spawn detached VBS launchers.
+  • DEPENDENCY NOTES:
+    - VMware Targets: Require SNMP manual enablement via VAMI or CLI.
+    - Python 3.14: Causes Eventlet RLock warnings; suppressed via stderr redirection.
 
-### Feature: Speed Degradation Detection
-- **Logic**: Infers hardware capability from name (e.g., Gi -> 1Gbps) and compares to current link speed.
-- **UI**: Highlights speed in Red background with Cyan text; includes technical info icon.
-
-### Feature: Interface Name Shortening
-- **Logic**: Abbreviates standard names (GigabitEthernet -> Gi, TenGigabitEthernet -> Te, etc.).
-
-### Feature: Zero-Cache Policy [MANDATORY BOUNDARY]
-- **Goal**: Absolute suppression of `__pycache__` and `.pyc` files.
-- **Strict Boundary**: AI Agents must never create cache artifacts. `PYTHONDONTWRITEBYTECODE=1` is enforced globally.
-
-### Feature: Background Persistence
-- **Goal**: Ensure the monitor starts automatically after system reboots without manual intervention.
-- **Logic**: 
-    1. `install.bat` (requires **Administrator** privileges) registers a Windows Scheduled Task named `SNMP-Monitor-Backend`.
-    2. Uses a **VBScript Wrapper** (`master_background.vbs`) to execute `master.bat` invisibly.
-    3. Configured for "At System Startup" (`/sc onstart`) as the `SYSTEM` user.
-- **Management**: Can be managed via `taskschd.msc` (Windows Task Scheduler).
-
-### Feature: Robust Lifecycle Management
-- **install.bat**: Automatically kills existing processes, removes old tasks, and handles folder migration/wiping with strict verification logic and high-visibility error handling.
-- **uninstall.bat**: Self-relocating uninstaller that moves to `%TMP%` to ensure the entire `C:\SNMP-Server` directory can be wiped cleanly.
-
-================================================================================
-  End of project_structure.txt
-================================================================================
+────────────────────────────────────────────────────────────────────────────────
+  END OF DOCUMENT — THE ULTIMATIVE SOURCE OF TRUTH
+────────────────────────────────────────────────────────────────────────────────
