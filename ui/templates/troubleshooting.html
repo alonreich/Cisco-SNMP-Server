@@ -1,0 +1,391 @@
+{% extends "base.html" %}
+{% block title %}Logical Topology — SNMP Master{% endblock %}
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.6/standalone/umd/vis-network.min.js?v={{ range(1, 999) | random }}"></script>
+<style>
+    #topology_container {
+        width: 100%;
+        height: calc(100vh - 240px);
+        background: #1e293b;
+        background-image: radial-gradient(#334155 1px, transparent 1px);
+        background-size: 32px 32px;
+        border-radius: 1rem;
+        border: 1px solid #475569;
+        position: relative;
+        overflow: hidden;
+        cursor: grab !important;
+    }
+    #topology_container:active { cursor: grabbing !important; }
+    .vis-network { outline: none; }
+    .util-bar { transition: width 0.3s ease, background-color 0.3s ease; }
+
+    /* Device filter dropdown */
+    #device_filter {
+        background: #1e293b;
+        border: 1px solid #475569;
+        color: #cbd5e1;
+        border-radius: 0.75rem;
+        padding: 0.5rem 1rem;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        cursor: pointer;
+        outline: none;
+        transition: all 0.2s;
+    }
+    #device_filter:hover { border-color: #3b82f6; color: #ffffff; }
+    #device_filter:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.2); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+    <div>
+        <h1 class="text-sm font-bold text-white uppercase tracking-widest">Logical <span class="text-blue-300">Topology</span></h1>
+        <p class="text-[11px] text-slate-400 uppercase tracking-widest font-semibold mt-1">L2/L3 Physical Path Mapping via LLDP & CDP</p>
+    </div>
+    <div class="flex items-center gap-3">
+        <!-- Device Filter Dropdown -->
+        <select id="device_filter" aria-label="Filter devices by type">
+            <option value="all">All Infrastructure</option>
+            <option value="cisco">Network Core Only</option>
+            <option value="vmware">Compute Fabric Only</option>
+        </select>
+        <button onclick="saveLayout()" class="btn btn-primary text-xs uppercase font-bold px-5">
+            <i class="fas fa-save mr-2"></i> Save State
+        </button>
+        <button onclick="refreshMap()" class="btn btn-secondary text-xs uppercase font-bold px-5">
+            <i class="fas fa-expand-arrows-alt mr-2"></i> Re-Layout
+        </button>
+    </div>
+</div>
+
+<div class="relative bg-surface-800 rounded-2xl border border-surface-700 shadow-2xl overflow-hidden">
+    <div id="topology_container"></div>
+    
+    <!-- Legend -->
+    <div class="absolute bottom-4 left-4 flex flex-wrap gap-4 bg-surface-900/90 backdrop-blur-md border border-surface-700 px-5 py-3 rounded-xl pointer-events-none select-none text-[11px] font-bold text-slate-300 uppercase tracking-tight shadow-xl">
+        <div class="flex items-center gap-2">
+            <span class="w-4 h-2.5 rounded-sm bg-accent border border-blue-300 shadow-[0_0_8px_rgba(59,130,246,0.6)]"></span> Network
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="w-4 h-4 rounded-sm bg-purple-700 border border-purple-400 shadow-[0_0_8px_rgba(167,139,250,0.4)]" style="clip-path: polygon(10% 0%, 90% 0%, 100% 40%, 90% 100%, 10% 100%, 0% 40%)"></span> Host
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="w-4 h-4 rounded-full bg-green-700 border border-green-400 shadow-[0_0_8px_rgba(34,197,94,0.4)]"></span> Instance
+        </div>
+        <div class="border-l border-surface-700 pl-4 flex gap-4">
+            <span class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_10px_#22c55e]"></span> Up</span>
+            <span class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_10px_#ef4444]"></span> Down</span>
+        </div>
+    </div>
+</div>
+
+<script>
+    let network = null;
+    let nodesDS = new vis.DataSet();
+    let edgesDS = new vis.DataSet();
+    const savedPositions = {{ positions | tojson if positions else '{}' }};
+
+    /* VMware overlay PNG — preloaded */
+    const vmwareImg = new Image();
+    vmwareImg.src = '/static/vmware_overlay.png';
+
+    /* All raw data from API — stored for re-filtering */
+    let allDevices = [];
+    let allLinks = [];
+
+    function shortenIfName(name) {
+        if (!name) return '';
+        return name.replace(/FastEthernet/gi, 'Fa')
+                   .replace(/GigabitEthernet/gi, 'Gi')
+                   .replace(/TenGigabitEthernet/gi, 'Te')
+                   .replace(/Port-channel/gi, 'Po')
+                   .replace(/Vlan/gi, 'Vl');
+    }
+
+    function classifyDevice(d) {
+        const h = (d.hostname || '').toLowerCase();
+        const ip = d.ip || '';
+        if (h.includes('esxi')) return 'esxi';
+        const vcsaIPs = ['10.160.4.40', '10.160.4.14'];
+        if (vcsaIPs.includes(ip)) return 'vm';
+        if (d.target_type === 'vmware' && !h.includes('esxi')) return 'vm';
+        if (h === 'none' || h === '') return 'vm';
+        return 'switch';
+    }
+
+    function deviceCategory(d) {
+        const dtype = classifyDevice(d);
+        if (dtype === 'switch') return 'cisco';
+        return 'vmware';
+    }
+
+    /*
+     * SVG node builders — all exactly 110x45 viewBox
+     */
+    function buildNodeSVG(dtype, statusColor, showVMware) {
+        const bg = '#1e293b';
+        const inner = '#0f172a';
+        const fw = 2;
+        const W = 110, H = 45;
+        let content = '';
+
+        if (dtype === 'switch') {
+            content = `
+                <rect x="${fw}" y="${fw}" width="${W - fw*2}" height="${H - fw*2}" rx="6" fill="${bg}" stroke="${statusColor}" stroke-width="${fw}"/>
+                <rect x="10" y="10" width="${W - 20}" height="${H - 20}" rx="3" fill="${inner}" stroke="#334155" stroke-width="0.8"/>
+                <line x1="18" y1="16" x2="28" y2="16" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"/>
+                <line x1="18" y1="22" x2="28" y2="22" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"/>
+                <line x1="18" y1="28" x2="28" y2="28" stroke="#60a5fa" stroke-width="2" stroke-linecap="round"/>
+                <circle cx="${W - 15}" cy="${H/2}" r="4" fill="${statusColor}" filter="drop-shadow(0 0 2px ${statusColor})"/>`;
+        } else if (dtype === 'esxi') {
+            content = `
+                <rect x="${fw}" y="${fw}" width="${W - fw*2}" height="${H - fw*2}" rx="6" fill="${bg}" stroke="${statusColor}" stroke-width="${fw}"/>
+                <rect x="10" y="8" width="90" height="14" rx="3" fill="#1e1b4b" stroke="#818cf8" stroke-width="0.8"/>
+                <rect x="14" y="11" width="16" height="8" rx="2" fill="#818cf8" opacity="0.4"/>
+                <rect x="34" y="11" width="16" height="8" rx="2" fill="#818cf8" opacity="0.4"/>
+                <rect x="54" y="11" width="16" height="8" rx="2" fill="#818cf8" opacity="0.4"/>
+                <rect x="74" y="11" width="16" height="8" rx="2" fill="#818cf8" opacity="0.4"/>
+                <text x="55" y="32" text-anchor="middle" fill="#818cf8" font-size="6" font-family="monospace" font-weight="bold">HYPERVISOR</text>
+                <circle cx="${W - 15}" cy="${H/2}" r="4" fill="${statusColor}" filter="drop-shadow(0 0 2px ${statusColor})"/>`;
+            if (showVMware) {
+                content += `<image href="/static/vmware_overlay.png" x="${W - 24}" y="2" width="18" height="18" opacity="0.9"/>`;
+            }
+        } else {
+            content = `
+                <rect x="${fw}" y="${fw}" width="${W - fw*2}" height="${H - fw*2}" rx="${H/2}" fill="${bg}" stroke="${statusColor}" stroke-width="${fw}"/>
+                <ellipse cx="${W/2}" cy="${H/2}" rx="35" ry="12" fill="${inner}" stroke="#334155" stroke-width="0.8"/>
+                <circle cx="${W - 15}" cy="${H/2}" r="4" fill="${statusColor}" filter="drop-shadow(0 0 2px ${statusColor})"/>`;
+            if (showVMware) {
+                content += `<image href="/static/vmware_overlay.png" x="${W - 24}" y="2" width="18" height="18" opacity="0.9"/>`;
+            }
+        }
+
+        return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${content}</svg>`;
+    }
+
+    function nodeImage(dtype, statusColor, showVMware) {
+        const svg = buildNodeSVG(dtype, statusColor, showVMware);
+        return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    }
+
+    /**
+     * Build the vis.js network with the given filter
+     */
+    function buildNetwork(filterMode) {
+        const container = document.getElementById('topology_container');
+
+        // Filter devices
+        let filteredDevices = allDevices;
+        if (filterMode === 'cisco') {
+            filteredDevices = allDevices.filter(d => classifyDevice(d) === 'switch');
+        } else if (filterMode === 'vmware') {
+            filteredDevices = allDevices.filter(d => classifyDevice(d) !== 'switch');
+        }
+
+        const filteredIPs = new Set(filteredDevices.map(d => d.ip));
+
+        // Filter links: only keep links where BOTH ends are visible
+        let filteredLinks = allLinks.filter(l => {
+            const fromVisible = filteredIPs.has(l.local_ip);
+            // Check if remote end maps to a visible device
+            const remoteDevice = filteredDevices.find(d => {
+                if (d.ip === l.remote_id) return true;
+                if (!d.hostname || !l.remote_id) return false;
+                return d.hostname.toLowerCase().split('.')[0] === l.remote_id.toLowerCase().split('.')[0];
+            });
+            return fromVisible && remoteDevice;
+        });
+
+        const offlineDevices = filteredDevices.filter(d => d.status !== 'online');
+
+        const nodeItems = filteredDevices.map(d => {
+            const pos = savedPositions[d.ip] || {};
+            const isOffline = d.status !== 'online';
+            const statusColor = isOffline ? '#ef4444' : '#22c55e';
+            const dtype = classifyDevice(d);
+            const showVMware = (dtype === 'esxi' || dtype === 'vm');
+
+            let initialX = pos.x;
+            let initialY = pos.y;
+            if (initialX === undefined) {
+                if (isOffline) {
+                    const offlineIndex = offlineDevices.indexOf(d);
+                    initialX = -600;
+                    initialY = -400 + offlineIndex * 150;
+                } else if (dtype === 'switch') {
+                    initialX = 0;
+                    initialY = 0;
+                } else if (dtype === 'esxi') {
+                    initialX = 500;
+                    initialY = 0;
+                } else {
+                    initialX = 900;
+                    initialY = 0;
+                }
+            }
+
+            return {
+                id: d.ip,
+                x: initialX,
+                y: initialY,
+                label: `${d.hostname || d.ip}\n${d.ip}`,
+                shape: 'image',
+                image: nodeImage(dtype, statusColor, showVMware),
+                size: 45,
+                font: {
+                    color: '#f1f5f9',
+                    size: 13,
+                    face: 'Inter, system-ui',
+                    multi: false,
+                    strokeWidth: 4,
+                    strokeColor: '#334155',
+                    vadjust: 38
+                },
+                borderWidth: 0,
+                shadow: { enabled: true, color: 'rgba(0,0,0,0.6)', size: 8, x: 0, y: 4 }
+            };
+        });
+
+        const edgeItems = [];
+        const processedPairs = new Set();
+
+        filteredLinks.forEach(l => {
+            const remoteDevice = filteredDevices.find(d => {
+                if (d.ip === l.remote_id) return true;
+                if (!d.hostname || !l.remote_id) return false;
+                const h1 = d.hostname.toLowerCase().split('.')[0];
+                const h2 = l.remote_id.toLowerCase().split('.')[0];
+                return h1 === h2;
+            });
+
+            if (remoteDevice && l.local_ip !== remoteDevice.ip) {
+                const pairId = [l.local_ip, remoteDevice.ip].sort().join('-');
+                if (!processedPairs.has(pairId)) {
+                    edgeItems.push({
+                        from: l.local_ip,
+                        to: remoteDevice.ip,
+                        title: `${shortenIfName(l.local_port)} \u2194 ${shortenIfName(l.remote_port)}`,
+                        label: `${shortenIfName(l.local_port)}`,
+                        font: { 
+                            size: 11, color: '#93c5fd', align: 'top',
+                            background: '#1e293bdd', strokeWidth: 3, strokeColor: '#1e293b', face: 'monospace', weight: 'bold'
+                        },
+                        arrows: { to: { enabled: true, scaleFactor: 0.6, type: 'arrow' } },
+                        color: { color: '#3b82f660', highlight: '#93c5fd', opacity: 0.6, hover: '#93c5fd' },
+                        width: 2, length: 280,
+                        smooth: { type: 'continuous', roundness: 0.2 }
+                    });
+
+                    edgeItems.push({
+                        from: l.local_ip,
+                        to: remoteDevice.ip,
+                        label: `${shortenIfName(l.remote_port)}`,
+                        font: { 
+                            size: 11, color: '#c084fc', align: 'bottom',
+                            background: '#1e293bdd', strokeWidth: 3, strokeColor: '#1e293b', face: 'monospace', weight: 'bold'
+                        },
+                        arrows: { to: { enabled: false } },
+                        color: { color: 'transparent', highlight: 'transparent', opacity: 0, hover: 'transparent' },
+                        width: 0, length: 280,
+                        smooth: { type: 'continuous', roundness: 0.2 },
+                        physics: false
+                    });
+
+                    processedPairs.add(pairId);
+                }
+            }
+        });
+
+        nodesDS.clear();
+        edgesDS.clear();
+        nodesDS.add(nodeItems);
+        edgesDS.add(edgeItems);
+
+        const hasPositions = Object.keys(savedPositions).length > 0;
+
+        const options = {
+            nodes: {
+                shapeProperties: { useBorderWithImage: false }
+            },
+            edges: { 
+                hoverWidth: 3, selectionWidth: 4,
+                chosen: {
+                    edge: function(values) {
+                        if (values.color !== 'transparent') {
+                            values.color = '#3b82f6';
+                            values.width = 4;
+                        }
+                    }
+                }
+            },
+            interaction: { 
+                hover: true, dragNodes: true, dragView: true, zoomView: true,
+                tooltipDelay: 200
+            },
+            physics: {
+                enabled: !hasPositions,
+                solver: 'forceAtlas2Based',
+                forceAtlas2Based: {
+                    gravitationalConstant: -400,
+                    centralGravity: 0.005,
+                    springLength: 300,
+                    springConstant: 0.04,
+                    damping: 0.5
+                },
+                stabilization: { iterations: 1000 }
+            }
+        };
+
+        if (network) network.destroy();
+        network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, options);
+
+        network.on("hoverNode", () => { container.style.setProperty('cursor', 'pointer', 'important'); });
+        network.on("blurNode", () => { container.style.setProperty('cursor', 'grab', 'important'); });
+        network.on("hoverEdge", () => { container.style.setProperty('cursor', 'pointer', 'important'); });
+        network.on("blurEdge", () => { container.style.setProperty('cursor', 'grab', 'important'); });
+        network.on("dragStart", (params) => { if (!params.nodes.length) container.style.setProperty('cursor', 'grabbing', 'important'); });
+        network.on("dragEnd", () => { container.style.setProperty('cursor', 'grab', 'important'); });
+        network.on("click", (params) => {
+            if (params.nodes.length > 0) {
+                showDetails(params.nodes[0]);
+            }
+        });
+    }
+
+    async function initTopology() {
+        const response = await fetch(`/api/topology?t=${Date.now()}`);
+        const data = await response.json();
+        
+        allDevices = data.devices;
+        allLinks = data.links;
+
+        // Build with current filter
+        const filter = document.getElementById('device_filter').value;
+        buildNetwork(filter);
+    }
+
+    // Filter dropdown change handler
+    document.getElementById('device_filter').addEventListener('change', function() {
+        buildNetwork(this.value);
+    });
+
+    function saveLayout() {
+        const pos = network.getPositions();
+        fetch('/api/topology/positions', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(pos)
+        }).then(() => alert('Layout saved.'));
+    }
+
+    function refreshMap() {
+        network.setOptions({ physics: { enabled: true } });
+        setTimeout(() => network.setOptions({ physics: { enabled: false } }), 5000);
+    }
+
+    document.addEventListener('DOMContentLoaded', initTopology);
+</script>
+{% endblock %}

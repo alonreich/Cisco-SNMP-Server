@@ -2,6 +2,23 @@
 cd /d "%~dp0"
 set PYTHONDONTWRITEBYTECODE=1
 
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo.
+    echo.
+    powershell -Command "Write-Host '===========================================================================' -ForegroundColor Red"
+    powershell -Command "Write-Host '                                                                           ' -BackgroundColor Red -ForegroundColor White"
+    powershell -Command "Write-Host '        SCRIPT DID NOT RUN AS ADMINISTRATOR!                               ' -BackgroundColor Red -ForegroundColor White"
+    powershell -Command "Write-Host '                                                                           ' -BackgroundColor Red -ForegroundColor White"
+    powershell -Command "Write-Host '        PLEASE RUN AS ADMINISTRATOR AND TRY AGAIN!                         ' -BackgroundColor Red -ForegroundColor White"
+    powershell -Command "Write-Host '                                                                           ' -BackgroundColor Red -ForegroundColor White"
+    powershell -Command "Write-Host '===========================================================================' -ForegroundColor Red"
+    echo.
+    echo.
+    pause
+    exit /b 1
+)
+
 echo Terminating existing processes (Forced)...
 powershell -Command "Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force" >nul 2>&1
 timeout /t 2 /nobreak >nul
@@ -30,10 +47,10 @@ if exist "logs\flask.log" (
 )
 
 echo Starting Polling Engine...
-wscript.exe "%~dp0master_background.vbs"
+wscript.exe "%~dp0launchers\master_background.vbs"
 
 echo Starting Web Dashboard...
-wscript.exe "%~dp0main_background.vbs"
+wscript.exe "%~dp0launchers\main_background.vbs"
 
 echo.
 echo ======================================================

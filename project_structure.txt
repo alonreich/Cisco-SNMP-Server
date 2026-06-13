@@ -1,33 +1,98 @@
 ================================================================================
-  CISCO SNMP MASTER — THE DEFINITIVE TECHNICAL MANIFESTO (V4.0)
+  CISCO SNMP MASTER — THE DEFINITIVE TECHNICAL MANIFESTO (V5.0)
 ================================================================================
-  Updated: Friday, June 12, 2026
+  Updated: Friday, June 13, 2026
   Status: Production-Grade NMS (ZERO-CACHE ARCHITECTURE)
   Primary Stack: Python 3.14, Flask, SocketIO, Eventlet, SQLite, vis.js, Tailwind
 
 ────────────────────────────────────────────────────────────────────────────────
-  1. CORE ARCHITECTURAL PRINCIPLE: THE ZERO-CACHE MANDATE
+  1. PROJECT DIRECTORY LAYOUT
 ────────────────────────────────────────────────────────────────────────────────
-  This system is engineered for absolute real-time accuracy. Caching at any 
+
+  C:\SNMP-Server\
+  │
+  │   Root — operational scripts and metadata only.
+  ├── .gitattributes              Git line-ending rules
+  ├── .gitignore                  Excludes venv, config.json, caches
+  ├── Install.bat                 Full installer (Python, venv, pip, startup task)
+  ├── uninstall.bat               Full reversal (kill PIDs, remove task, wipe folder)
+  ├── restart_server.bat          Kill-and-relaunch both services
+  ├── project_structure.txt       THIS FILE — the definitive reference
+  ├── README.md                   GitHub-facing project summary
+  │
+  ├── config\                     All configuration and dynamic config files
+  │   ├── config.json             LIVE config (gitignored — contains SNMP communities)
+  │   ├── config.json.example     Safe template for new deployments
+  │   ├── requirements.txt        Python pip dependencies
+  │   └── topology_positions.json Persisted drag-drop node positions (vis.js)
+  │
+  ├── server\                     Python entry points (both processes)
+  │   ├── main.py                 Flask + SocketIO web dashboard (port 8000)
+  │   └── master.py               Async SNMP poller (30s cycles)
+  │
+  ├── database\                   SQLite persistence layer
+  │   ├── __init__.py             Package marker (empty)
+  │   ├── history_db.py           HistoryDB class — all DB operations
+  │   └── history.db              Runtime database (auto-created, ~20MB cap)
+  │
+  ├── ui\                         All presentation assets
+  │   ├── templates\              Jinja2 HTML templates
+  │   │   ├── base.html           Master layout (nav, sidebar, socket, escapeHtml)
+  │   │   ├── index.html          Dashboard — leaderboard, device grid, health audit
+  │   │   ├── troubleshooting.html Topology map (vis.js network graph)
+  │   │   ├── cpu_v2.html         CPU monitor (per-device time-series charts)
+  │   │   ├── memory.html         Memory monitor (pool-level usage charts)
+  │   │   └── config_history.html Configuration change log viewer
+  │   ├── static\                 Browser-served assets (Flask static_folder)
+  │   │   ├── tailwind.min.js     Tailwind CSS JIT compiler (client-side)
+  │   │   └── vmware_overlay.png  VMware badge overlay for topology nodes
+  │   └── icons\                  Topology node images
+  │       ├── Cisco Switch.jpg    Cisco device icon
+  │       ├── ESXi Host.jpg       VMware ESXi host icon
+  │       └── VCSA.jpg            vCenter Server Appliance icon
+  │
+  ├── launchers\                  Hidden-window process launchers
+  │   ├── startup.vbs             Unified launcher (master + main, 3s stagger)
+  │   ├── master_background.vbs   Launches master.py (Style 0 — no console)
+  │   └── main_background.vbs     Launches main.py (Style 0 — no console)
+  │
+  ├── logs\                       Runtime log output
+  │   ├── flask.log               Web server log (RotatingFileHandler, 5MB cap)
+  │   └── monitor.log             SNMP poller log (RotatingFileHandler, 5MB cap)
+  │
+  ├── developer_tools\            Maintenance utilities (not needed in production)
+  │   └── clean.bat               Purges __pycache__, .pyc, tool caches
+  │
+  └── venv\                       Python virtual environment (auto-created by Install.bat)
+
+────────────────────────────────────────────────────────────────────────────────
+  2. CORE ARCHITECTURAL PRINCIPLE: THE ZERO-CACHE MANDATE
+────────────────────────────────────────────────────────────────────────────────
+  This system is engineered for absolute real-time accuracy. Caching at any
   layer (Filesystem, Python Bytecode, Memory, or Browser) is strictly forbidden.
 
   ENFORCEMENT MECHANISMS:
-  • Bytecode Suppression: 'sys.dont_write_bytecode = True' and 
-    'set PYTHONDONTWRITEBYTECODE=1' are mandatory across all layers.
-  • Memory Integrity: Data MUST NOT be stored in global variables or local 
+  • Bytecode Suppression (4 layers):
+    - Python:  sys.dont_write_bytecode = True (in main.py and master.py)
+    - Env Var: PYTHONDONTWRITEBYTECODE=1 (in all .bat and .vbs launchers)
+    - Result:  __pycache__ folders and .pyc files are never generated.
+  • Memory Integrity: Data MUST NOT be stored in global variables or local
     dictionaries. Every broadcast/request MUST trigger a direct SQLite read.
-  • Browser Cache Busting: 'Cache-Control: no-store' headers are injected 
+  • Browser Cache Busting: 'Cache-Control: no-store' headers are injected
     into every HTTP response via the '@app.after_request' hook.
-  • Process Isolation: 'master.py' and 'main.py' run in completely detached 
-    background scopes via VBScript wrappers to prevent console host binding.
+  • Process Isolation: server\main.py and server\master.py run in completely
+    detached background scopes via VBS wrappers (Style 0) to prevent
+    console host binding.
 
 ────────────────────────────────────────────────────────────────────────────────
-  2. DATA PROCESSING PIPELINE (SNMP ➔ DB ➔ WS ➔ UI)
+  3. DATA PROCESSING PIPELINE (SNMP → DB → WS → UI)
 ────────────────────────────────────────────────────────────────────────────────
-  A. THE ENGINE (master.py):
+  A. THE ENGINE (server\master.py):
      • Technology: Asyncio + modern 'pysnmp' v7 (v3arch).
      • Interval: 30-second cycles.
      • Logic: Parallel polling of all 'monitored_switches' in config.json.
+     • Path Resolution: PROJECT_ROOT anchored — all paths are absolute
+       relative to C:\SNMP-Server regardless of working directory.
      • Key OIDs:
        - CPU Load: 1.3.6.1.4.1.9.9.109.1.1.1.1.8 (Cisco 5min Avg)
        - Interfaces: .1.3.6.1.2.1.2.2.1 (Standard MIB-II)
@@ -35,22 +100,24 @@
        - Topology: 1.0.8802.1.1.2.1.4.1.1.9 (LLDP) / 1.3.6.1.4.1.9.9.23.1.2.1.1.6 (CDP)
        - Memory: 1.3.6.1.4.1.9.9.48.1.1.1 (Cisco Memory Pool)
 
-  B. THE PERSISTENCE (database/history_db.py):
+  B. THE PERSISTENCE (database\history_db.py):
      • Schema:
        - [devices]: IP, Hostname, sys_descr, Status, last_seen.
        - [interface_history]: in/out octets (raw 64-bit counters), speed, admin/oper.
        - [cpu_history] / [memory_history]: Time-series telemetry.
-       - [topology]: neighbor relationships (local_port ➔ remote_id/port).
+       - [topology]: neighbor relationships (local_port → remote_id/port).
      • Maintenance: Automatic FIFO trimming (Size capped at 20MB via VACUUM).
 
-  C. THE BROADCASTER (main.py):
+  C. THE BROADCASTER (server\main.py):
      • Technology: Flask + Socket.IO (Eventlet async_mode).
      • Background Loop: Wakes up every 15s.
      • Metrics Calculation: Computes Delta bps: ((curr - prev) * 8) / (dt * 10^6).
      • Event: socketio.emit('device_update', { devices, leaderboard })
+     • Template/Static: Served from ui\templates and ui\static (explicit
+       Flask constructor args).
 
 ────────────────────────────────────────────────────────────────────────────────
-  3. DASHBOARD UI/UX SPECIFICATION (THE PERFECT STATE)
+  4. DASHBOARD UI/UX SPECIFICATION
 ────────────────────────────────────────────────────────────────────────────────
   The Dashboard Interface Leaderboard is a rigid, high-density 1px black grid.
 
@@ -58,39 +125,153 @@
   • Theme: Deep Slate 700 (#334155). Text: Slate 100 (#f1f5f9).
   • Grid: 'border-collapse: collapse;' with '1px solid black' on all cells.
   • Spacing: Global py-4 padding. Table headers are compressed (py-2).
+  • Fonts: Inter (sans), JetBrains Mono (mono) via Google Fonts.
+
+  LEADERBOARD TOOLBAR (LEFT TO RIGHT):
+  1. [DISPLAY LIMIT] dropdown: Top 10 / Top 20 / Top 30.
+  2. [SNMP DEVICE TYPE] dropdown: Cisco Switches (default) / All / ESXi Only / VCSA Only.
+  3. [LEADERBOARD TITLE] + interface count badge.
+  4. [LAST UPDATE] timestamp.
+  5. [GLOBAL VIEW] button (visible only during device drilldown).
+  6. [UTILIZATION LEGEND] color key (green <30%, yellow 30-75%, red >75%).
+
+  USER PREFERENCE PERSISTENCE:
+  • Both dropdowns (Display Limit and SNMP Device Type) persist their
+    selected values to localStorage. On reload, saved preferences are
+    restored automatically. Default: Cisco Switches + Top 10.
 
   LEADERBOARD COLUMN ARCHITECTURE (STRICT):
-  1. [DEVICE] (110px-150px): 
+  1. [DEVICE] (110px-150px):
      - Data: Management IP (bold, text-sm) + (TYPE) in 8px grey font.
+     - Types: switch, esxi, vcsa (derived from target_type + hostname).
      - Action: Clicking triggers an ALPHABETICAL drill-down of all interfaces.
-  2. [INTERFACE] (180px fixed): 
-     - Names: Shortened shorthand (Gi, Fa, Te, Po, Vl, Lo, Tu).
+  2. [INTERFACE] (180px fixed):
+     - Names: Shortened shorthand (Gi, Fa, Te, Two, Five, Twe, Fo, Hu, Po, Vl, Lo, Tu).
      - Alignment: Perfectly centered and middle-aligned (vertical/horizontal).
      - Wrapping: Max 3 lines before truncation.
-  3. [DESCRIPTION] (120px-300px): 
+  3. [DESCRIPTION] (120px-300px):
      - Natural expansion up to 300px before line wrap.
-  4. [SPEED] (100px fixed): 
+  4. [SPEED] (100px fixed):
      - Format: '100mb', '1gb', '10gb'. Red if descr/speed mismatch found.
-  5. [TRAFFIC (mbps)] (100px fixed): 
+  5. [TRAFFIC (mbps)] (100px fixed):
      - Header: Lowercase 'mbps'.
      - Markers: Green (↓In) and Blue (↑Out). Shifted -12px left for balance.
-  6. [UTILIZATION] (16rem min): 
+  6. [UTILIZATION] (16rem min):
      - Triple-threshold color bars (Green <30%, Yellow <75%, Red >75%).
 
-────────────────────────────────────────────────────────────────────────────────
-  4. OPERATIONAL INFRASTRUCTURE
-────────────────────────────────────────────────────────────────────────────────
-  • LAUNCHERS: 
-    - main_background.vbs / master_background.vbs: Hidden window (Style 0).
-  • RESTART PROTOCOL (restart_server.bat):
-    1. Force-kill all 'python.exe' via PowerShell (Stop-Process -Force).
-    2. Wait 2s for OS to release file locks on logs.
-    3. Clear/Delete stale logs in /logs folder.
-    4. Spawn detached VBS launchers.
-  • DEPENDENCY NOTES:
-    - VMware Targets: Require SNMP manual enablement via VAMI or CLI.
-    - Python 3.14: Causes Eventlet RLock warnings; suppressed via stderr redirection.
+  ADDITIONAL DASHBOARD SECTIONS:
+  • Device Grid: Compact cards showing IP, hostname, status dot, CPU bar.
+  • Autonomous Health Guard: Real-time anomaly detection (offline alerts).
+
+  OTHER PAGES:
+  • /troubleshooting  — vis.js topology map with LLDP/CDP discovered links.
+  • /cpu              — Per-device CPU time-series with selectable time ranges.
+  • /memory           — Per-device memory pool usage charts.
+  • /config-history   — Chronological configuration change log.
 
 ────────────────────────────────────────────────────────────────────────────────
-  END OF DOCUMENT — THE ULTIMATIVE SOURCE OF TRUTH
+  5. MONITORED DEVICE TYPES
+────────────────────────────────────────────────────────────────────────────────
+  Devices are defined in config\config.json under "monitored_switches".
+  Each entry specifies: ip, community, polling_interval, target_type.
+
+  TARGET TYPES:
+  • "cisco"  — Cisco IOS/IOS-XE switches. Full telemetry (CPU, memory,
+               interfaces, LLDP/CDP topology).
+  • "vmware" — VMware hosts. Further classified at the UI layer:
+               - ESXi: hostname does NOT contain 'vcenter' or 'appliance'.
+               - VCSA: hostname contains 'vcenter' or 'appliance'.
+               Note: CPU/Memory OIDs are Cisco-specific and return no
+               data for VMware targets. Interface and topology data works.
+
+────────────────────────────────────────────────────────────────────────────────
+  6. API ENDPOINTS
+────────────────────────────────────────────────────────────────────────────────
+  All endpoints return JSON. No authentication (see config.json.example for
+  future auth scaffold).
+
+  GET  /                           Dashboard HTML page
+  GET  /troubleshooting            Topology HTML page
+  GET  /cpu                        CPU monitor HTML page
+  GET  /memory                     Memory monitor HTML page
+  GET  /config-history             Config history HTML page
+  GET  /api/devices                All devices + leaderboard JSON
+  GET  /api/topology               Topology links + device list
+  POST /api/topology/positions     Save vis.js node positions (body: JSON object)
+  GET  /api/device/<ip>/details    Single device detail + CPU history + alerts
+  GET  /api/device/<ip>/history    Time-series data (?metric=cpu|memory&hours=1|6|24|168)
+  GET  /api/alerts                 Alert log (?ip=x.x.x.x&limit=50)
+
+  WEBSOCKET EVENT:
+  • 'device_update' — Emitted every 15s by background loop. Payload:
+    { devices: [...], leaderboard: [...] }
+
+────────────────────────────────────────────────────────────────────────────────
+  7. OPERATIONAL INFRASTRUCTURE
+────────────────────────────────────────────────────────────────────────────────
+  INSTALLATION (Install.bat — Run as Administrator):
+    1. Detects Python in PATH; installs via winget if missing.
+    2. Creates venv\ virtual environment.
+    3. Upgrades pip; installs config\requirements.txt.
+    4. Registers scheduled task "SNMP-Monitor-Backend" (runs at logon,
+       highest privilege, triggers launchers\startup.vbs).
+    5. Launches both services immediately.
+
+  UNINSTALLATION (uninstall.bat — Run as Administrator):
+    1. Kills all Python processes with paths matching *SNMP-Server*.
+    2. Kills lingering wscript.exe processes tied to the project.
+    3. Removes the "SNMP-Monitor-Backend" scheduled task.
+    4. Recursively deletes C:\SNMP-Server\ (with retry on lock).
+    5. Self-relocates to %TEMP% first so it can delete its own directory.
+
+  RESTART PROTOCOL (restart_server.bat — Run as Administrator):
+    1. Force-kill all 'python.exe' via PowerShell (Stop-Process -Force).
+    2. Wait 2s for OS to release file locks on logs.
+    3. Clear/Delete stale logs in logs\ folder.
+    4. Spawn detached VBS launchers (master first, then main).
+
+  LAUNCHERS (launchers\ — VBScript, Style 0):
+    • startup.vbs:            Starts both processes (3s stagger, master first).
+    • master_background.vbs:  Starts server\master.py only.
+    • main_background.vbs:    Starts server\main.py only.
+    • All VBS files set PYTHONDONTWRITEBYTECODE=1 in process environment
+      before launching Python.
+
+  ADMIN GUARD:
+    • Install.bat, uninstall.bat, and restart_server.bat all probe for
+      Administrator privileges via 'net session'. On failure, a full-width
+      red background banner is displayed:
+        "SCRIPT DID NOT RUN AS ADMINISTRATOR!"
+        "PLEASE RUN AS ADMINISTRATOR AND TRY AGAIN!"
+
+  DEPENDENCY NOTES:
+    - VMware Targets: Require SNMP manual enablement via VAMI or CLI.
+    - Python 3.14: Causes Eventlet RLock warnings; suppressed via
+      stderr redirection and warnings.filterwarnings().
+    - pysnmp v7 (Python ≥3.14) or pysnmp-lextudio (Python <3.14)
+      selected automatically via requirements.txt markers.
+
+────────────────────────────────────────────────────────────────────────────────
+  8. CONFIGURATION REFERENCE (config\config.json)
+────────────────────────────────────────────────────────────────────────────────
+  {
+    "server":   { "port": 8000 },
+    "snmp":     { "community": "...", "timeout": 2, "retries": 1 },
+    "monitored_switches": [
+      { "ip": "x.x.x.x", "community": "...", "polling_interval": 30,
+        "target_type": "cisco|vmware" }
+    ],
+    "history":  { "retention_days": 30, "db_path": "database/history.db" },
+    "logging":  { "level": "INFO", "file": "logs/flask.log", "max_size_mb": 5 },
+    "display_limit": 30
+  }
+
+  NOTE: Relative paths in config.json (db_path, logging file) are resolved
+  against PROJECT_ROOT (C:\SNMP-Server) at runtime.
+
+  SECURITY: config.json is gitignored because it contains SNMP community
+  strings. Use config.json.example as a template for new deployments.
+
+────────────────────────────────────────────────────────────────────────────────
+  END OF DOCUMENT — THE DEFINITIVE SOURCE OF TRUTH
 ────────────────────────────────────────────────────────────────────────────────

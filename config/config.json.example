@@ -1,0 +1,51 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 5000,
+    "debug": false
+  },
+  "snmp": {
+    "community": "public",
+    "write_community": "private",
+    "version": "2c",
+    "timeout": 5,
+    "retries": 2
+  },
+  "devices": {
+    "static_list": ["192.168.1.1", "192.168.1.2"]
+  },
+  "polling": {
+    "interval_seconds": 60,
+    "cpu_interval": 60,
+    "memory_interval": 60,
+    "config_interval": 3600,
+    "interface_interval": 60
+  },
+  "history": {
+    "retention_days": 30,
+    "db_path": "database/history.db"
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "monitor.log",
+    "max_size_mb": 10
+  },
+  "cache_guard": {
+    "enabled": true,
+    "check_interval_seconds": 60
+  },
+  "alerts": {
+    "cpu_warning": 70,
+    "cpu_critical": 90,
+    "memory_warning": 75,
+    "memory_critical": 90,
+    "interface_down_alert": true,
+    "device_unreachable_alert": true
+  },
+  "auth": {
+    "enabled": false,
+    "username": "admin",
+    "password": "changeme",
+    "api_key": ""
+  }
+}
