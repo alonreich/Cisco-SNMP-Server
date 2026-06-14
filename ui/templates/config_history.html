@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Config Archives — SNMP Master{% endblock %}
+{% block title %}Config Archives & Version Control — SNMP Master{% endblock %}
 {% block extra_head %}
 <style>
     .diff-add { background: rgba(34,197,94,0.12); color: #4ade80; border-left: 3px solid #22c55e; padding-left: 0.5rem; margin: 1px 0; }
@@ -25,9 +25,14 @@
         padding: 1rem;
         cursor: pointer;
         transition: all 0.2s;
+        display: block;
+        width: 100%;
+        text-align: left;
+        font-family: inherit;
     }
     .snap-card:hover { border-color: #3b82f6; background: #475569; transform: translateX(4px); }
     .snap-card.active { border-color: #3b82f6; background: rgba(59,130,246,0.1); ring: 2px solid rgba(59,130,246,0.2); }
+    .snap-card:focus-visible { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5); }
 </style>
 {% endblock %}
 
@@ -65,20 +70,36 @@
 </div>
 
 <div class="grid grid-cols-12 gap-8">
-    <!-- Snapshots Sidebar -->
-    <div class="col-span-12 lg:col-span-4 xl:col-span-3">
-        <div class="flex items-center gap-2 mb-4">
-            <i class="fas fa-layer-group text-slate-400 text-xs"></i>
-            <h3 class="text-xs font-bold text-slate-200 uppercase tracking-widest">Version Snapshots</h3>
+    <div class="col-span-12 lg:col-span-4 xl:col-span-3 space-y-6">
+        <div class="bg-surface-800 p-5 rounded-2xl border border-surface-700 shadow-xl space-y-4">
+            <div class="flex items-center gap-2">
+                <i class="fas fa-cloud-download-alt text-accent text-xs"></i>
+                <h3 class="text-xs font-bold text-slate-200 uppercase tracking-widest">Live Extraction</h3>
+            </div>
+            <div class="space-y-3">
+                <label class="flex items-start gap-2.5 cursor-pointer">
+                    <input type="checkbox" id="chk_apply_hardening" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 mt-0.5">
+                    <span class="text-xs text-slate-300 select-none">Apply pending security hardening recommendations</span>
+                </label>
+                <button onclick="pullConfigLive()" id="btn_pull_live" class="w-full btn btn-primary text-xs uppercase font-bold py-2">
+                    <i class="fas fa-sync mr-2"></i> Extract Configuration
+                </button>
+            </div>
         </div>
-        <div id="config_list" class="space-y-3 max-h-[700px] overflow-y-auto pr-2 custom-scrollbar">
-            <div class="p-8 text-center border-2 border-dashed border-surface-700 rounded-2xl text-slate-500 text-sm italic">
-                Scanning archives for snapshots...
+
+        <div class="space-y-3">
+            <div class="flex items-center gap-2">
+                <i class="fas fa-layer-group text-slate-400 text-xs"></i>
+                <h3 class="text-xs font-bold text-slate-200 uppercase tracking-widest">Version Snapshots</h3>
+            </div>
+            <div id="config_list" class="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                <div class="p-8 text-center border-2 border-dashed border-surface-700 rounded-2xl text-slate-500 text-sm italic">
+                    Scanning archives for snapshots...
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Content Area -->
     <div class="col-span-12 lg:col-span-8 xl:col-span-9">
         <div class="flex items-center justify-between mb-4">
             <div class="flex items-center gap-2">
@@ -123,7 +144,7 @@ function loadConfigList() {
             list.innerHTML = history.map((snap, idx) => {
                 const ts = snap.timestamp.replace('T', ' ').substring(0,19);
                 return `
-                <div class="snap-card" id="snap_${snap.id}" onclick="viewConfig(${snap.id})">
+                <button class="snap-card" id="snap_${snap.id}" onclick="viewConfig(${snap.id})">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-xs font-bold text-white font-mono">${escapeHtml(ts)}</span>
                         ${snap.diff_from_previous ? '<span class="px-1.5 py-0.5 bg-yellow-500/20 text-yellow-400 text-[9px] font-black uppercase rounded border border-yellow-500/30">Modified</span>' : ''}
@@ -132,8 +153,12 @@ function loadConfigList() {
                         <i class="fas fa-tag text-[10px] text-slate-500"></i>
                         <span class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">${escapeHtml(snap.config_type)} Snapshot</span>
                     </div>
-                </div>`;
+                </button>`;
             }).join('');
+            
+            if (history.length > 0) {
+                viewConfig(history[0].id);
+            }
         })
         .catch(err => {
             list.innerHTML = '<div class="p-8 text-center text-red-400 text-xs font-bold uppercase">System Error: Failed to retrieve config history.</div>';
@@ -141,7 +166,6 @@ function loadConfigList() {
 }
 
 function viewConfig(id) {
-    // UI active state
     document.querySelectorAll('.snap-card').forEach(c => c.classList.remove('active'));
     document.getElementById('snap_' + id)?.classList.add('active');
 
@@ -187,6 +211,53 @@ function copyConfig() {
             btn.classList.remove('bg-green-600', 'border-green-500');
         }, 2000);
     });
+}
+
+function pullConfigLive() {
+    const ip = document.getElementById('device_select').value;
+    const type = document.getElementById('config_type_select').value;
+    const applyHardening = document.getElementById('chk_apply_hardening').checked;
+    const btn = document.getElementById('btn_pull_live');
+    
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-sync fa-spin mr-2"></i> Extracting...';
+    
+    fetch(`/api/device/${encodeURIComponent(ip)}/config/pull`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            type: type,
+            apply_hardening: applyHardening
+        })
+    })
+    .then(r => r.json())
+    .then(res => {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        if (res.status === 'ok') {
+            loadConfigList();
+        } else {
+            alert('Error: ' + (res.error || 'Failed to extract config'));
+        }
+    })
+    .catch(err => {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+        alert('Extraction failed due to network error');
+    });
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return text.toString()
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 }
 
 loadConfigList();

@@ -254,10 +254,10 @@
                     <tr class="hover:bg-white/[0.04] transition-colors duration-200">
                         <td class="px-3 py-1 border border-black text-center" style="width: 100px; min-width: 100px; max-width: 100px;">
                             <div class="flex flex-col items-center justify-center">
-                                <span class="font-bold text-blue-300 hover:text-white transition-colors cursor-pointer text-xs uppercase tracking-tight leading-none" 
+                                <button class="bg-transparent border-0 p-0 m-0 font-bold text-blue-300 hover:text-white transition-colors cursor-pointer text-xs uppercase tracking-tight leading-none focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-surface-900 rounded" 
                                       onclick="drillDownToSwitch('${escapeHtml(switchIP)}')" title="Drill into device interfaces">
                                     ${escapeHtml(deviceLabel)}
-                                </span>
+                                </button>
                                 <span class="text-[8px] text-slate-500 font-bold uppercase tracking-widest leading-none mt-1">(${escapeHtml(targetType)})</span>
                             </div>
                         </td>

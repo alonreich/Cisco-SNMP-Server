@@ -39,7 +39,8 @@
   │   ├── templates\              Jinja2 HTML templates
   │   │   ├── base.html           Master layout (nav, sidebar, socket, escapeHtml)
   │   │   ├── index.html          Dashboard — leaderboard, device grid, health audit
-  │   │   ├── troubleshooting.html Topology map (vis.js network graph)
+  │   │   ├── topology.html       Topology map (vis.js network graph)
+  │   │   ├── troubleshooting.html Security audit and device hardening remediation guide
   │   │   ├── cpu_v2.html         CPU monitor (per-device time-series charts)
   │   │   ├── memory.html         Memory monitor (pool-level usage charts)
   │   │   └── config_history.html Configuration change log viewer
@@ -164,7 +165,8 @@
   • Autonomous Health Guard: Real-time anomaly detection (offline alerts).
 
   OTHER PAGES:
-  • /troubleshooting  — vis.js topology map with LLDP/CDP discovered links.
+  • /topology         — vis.js topology map with LLDP/CDP discovered links.
+  • /troubleshooting  — Security audit and device hardening remediation guide.
   • /cpu              — Per-device CPU time-series with selectable time ranges.
   • /memory           — Per-device memory pool usage charts.
   • /config-history   — Chronological configuration change log.
@@ -191,7 +193,8 @@
   future auth scaffold).
 
   GET  /                           Dashboard HTML page
-  GET  /troubleshooting            Topology HTML page
+  GET  /topology                   Topology HTML page
+  GET  /troubleshooting            Troubleshooting and Audit HTML page
   GET  /cpu                        CPU monitor HTML page
   GET  /memory                     Memory monitor HTML page
   GET  /config-history             Config history HTML page
@@ -271,6 +274,28 @@
 
   SECURITY: config.json is gitignored because it contains SNMP community
   strings. Use config.json.example as a template for new deployments.
+
+────────────────────────────────────────────────────────────────────────────────
+  9. ACCESSIBILITY & UI/UX COMPLIANCE
+────────────────────────────────────────────────────────────────────────────────
+  To meet WCAG 2.1 AA and enterprise usability standards, the interface implements
+  the following controls:
+  • Keyboard Navigation:
+    - Interactive config snapshots (ui\templates\config_history.html) are fully focusable
+      button controls with keyboard selection support.
+    - Switch drilldown controls (ui\templates\index.html) use button tags allowing keyboard
+      Space/Enter activation.
+    - Focus outlines utilize high-contrast box-shadow borders globally.
+  • Color Contrast & Scale:
+    - Stats panels telemetry labels (CPU, Memory) use high-contrast slate colors (slate-300)
+      exceeding 4.5:1 contrast against bg-surface-900.
+    - Active navigation links use blue-600 (#2563eb) background to meet WCAG 4.5:1 contrast.
+  • Responsive Panels:
+    - Details side-panel adjusts dynamically to a maximum width of 500px, enabling full
+      compatibility with mobile viewports down to 320px width.
+  • VMware Telemetry Polling:
+    - Conditional checks in server\master.py target "vmware" nodes and parse CPU/Memory via
+      standard Host Resources MIB (RFC 2790) OIDs instead of Cisco-specific OIDs.
 
 ────────────────────────────────────────────────────────────────────────────────
   END OF DOCUMENT — THE DEFINITIVE SOURCE OF TRUTH

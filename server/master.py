@@ -2,9 +2,9 @@
 Master Background Orchestrator for Cisco SNMP Master.
 Refactored for modern pysnmp (async) + Automated Neighbor Discovery (LLDP/CDP).
 """
-import asyncio
 import sys
 sys.dont_write_bytecode = True
+import asyncio
 import json
 import logging
 import os
@@ -58,13 +58,19 @@ db.init_db()
 try:
     from pysnmp.hlapi.v3arch.asyncio import (
         CommunityData, ContextData, ObjectIdentity, ObjectType, 
-        SnmpEngine, UdpTransportTarget, get_cmd, bulk_walk_cmd
+        SnmpEngine, UdpTransportTarget, get_cmd, bulk_walk_cmd,
+        UsmUserData, usmHMACSHAAuthProtocol, usmHMACMD5AuthProtocol,
+        usmNoAuthProtocol, usmAesCfb128Protocol, usmDESPrivProtocol,
+        usmNoPrivProtocol
     )
     PYSNMP_V7 = True
 except ImportError:
     from pysnmp.hlapi.asyncio import (
         CommunityData, ContextData, ObjectIdentity, ObjectType, 
-        SnmpEngine, UdpTransportTarget, getCmd as get_cmd, bulkWalkCmd as bulk_walk_cmd
+        SnmpEngine, UdpTransportTarget, getCmd as get_cmd, bulkWalkCmd as bulk_walk_cmd,
+        UsmUserData, usmHMACSHAAuthProtocol, usmHMACMD5AuthProtocol,
+        usmNoAuthProtocol, usmAesCfb128Protocol, usmDESPrivProtocol,
+        usmNoPrivProtocol
     )
     PYSNMP_V7 = False
 
@@ -91,21 +97,47 @@ OID_MEM_POOL_FREE = '1.3.6.1.4.1.9.9.48.1.1.1.6'
 
 IF_STATUS_MAP = {'1': 'up', '2': 'down', '3': 'testing'}
 
-async def snmp_get(engine, ip, oid, community):
+AUTH_PROT_MAP = {
+    'sha': usmHMACSHAAuthProtocol,
+    'md5': usmHMACMD5AuthProtocol,
+    'none': usmNoAuthProtocol
+}
+
+PRIV_PROT_MAP = {
+    'aes': usmAesCfb128Protocol,
+    'des': usmDESPrivProtocol,
+    'none': usmNoPrivProtocol
+}
+
+def get_credentials(s):
+    if s.get('snmp_version') == 3 or 'username' in s:
+        username = s.get('username', 'MonitorUser')
+        auth_key = s.get('auth_key')
+        priv_key = s.get('priv_key')
+        auth_protocol = s.get('auth_protocol', 'sha').lower()
+        priv_protocol = s.get('priv_protocol', 'aes').lower()
+        auth_proto = AUTH_PROT_MAP.get(auth_protocol, usmHMACSHAAuthProtocol)
+        priv_proto = PRIV_PROT_MAP.get(priv_protocol, usmAesCfb128Protocol)
+        return UsmUserData(username, authKey=auth_key, privKey=priv_key, authProtocol=auth_proto, privProtocol=priv_proto)
+    else:
+        comm = s.get('community') or config['snmp']['community']
+        return CommunityData(comm)
+
+async def snmp_get(engine, ip, oid, credentials):
     target = (ip, 161)
     if PYSNMP_V7:
         transport = await UdpTransportTarget.create(target, timeout=config['snmp']['timeout'], retries=config['snmp']['retries'])
     else:
         transport = UdpTransportTarget(target, timeout=config['snmp']['timeout'], retries=config['snmp']['retries'])
     try:
-        iterator = get_cmd(engine, CommunityData(community), transport, ContextData(), ObjectType(ObjectIdentity(oid)))
+        iterator = get_cmd(engine, credentials, transport, ContextData(), ObjectType(ObjectIdentity(oid)))
         if asyncio.iscoroutine(iterator): res = await iterator
         else: res = await next(iterator)
         if res[0] or res[1]: return None
         return str(res[3][0][1])
     except: return None
 
-async def snmp_walk(engine, ip, base_oid, community):
+async def snmp_walk(engine, ip, base_oid, credentials):
     results = {}
     target = (ip, 161)
     if PYSNMP_V7:
@@ -113,7 +145,7 @@ async def snmp_walk(engine, ip, base_oid, community):
     else:
         transport = UdpTransportTarget(target, timeout=config['snmp']['timeout'], retries=config['snmp']['retries'])
     try:
-        walk = bulk_walk_cmd(engine, CommunityData(community), transport, ContextData(), 0, 25, ObjectType(ObjectIdentity(base_oid)), lexicographicMode=False)
+        walk = bulk_walk_cmd(engine, credentials, transport, ContextData(), 0, 25, ObjectType(ObjectIdentity(base_oid)), lexicographicMode=False)
         if hasattr(walk, '__aiter__'):
             async for err, status, idx, varBindTable in walk:
                 if err or status: break
@@ -131,52 +163,82 @@ async def snmp_walk(engine, ip, base_oid, community):
     except: pass
     return results
 
-async def poll_device(engine, ip, community):
+async def poll_device(engine, s):
+    ip = s['ip']
+    target_type = s.get('target_type', 'cisco')
+    credentials = get_credentials(s)
     try:
-        sys_descr = await snmp_get(engine, ip, OID_SYSDESCR, community)
+        sys_descr = await snmp_get(engine, ip, OID_SYSDESCR, credentials)
         if not sys_descr:
             db.update_device({'ip': ip, 'status': 'offline'})
             return
 
-        sys_name = await snmp_get(engine, ip, OID_SYSNAME, community) or ip
-        sys_uptime = await snmp_get(engine, ip, OID_SYSUPTIME, community)
+        sys_name = await snmp_get(engine, ip, OID_SYSNAME, credentials) or ip
+        sys_uptime = await snmp_get(engine, ip, OID_SYSUPTIME, credentials)
         db.update_device({'ip': ip, 'status': 'online', 'sys_name': sys_name, 'hostname': sys_name, 'sys_descr': sys_descr, 'sys_uptime': sys_uptime})
 
-        cpu_walk = await snmp_walk(engine, ip, OID_CPU, community)
-        cpu_vals = [v for v in cpu_walk.values() if v and str(v).strip()]
-        if cpu_vals:
-            try: db.record_cpu(ip, float(cpu_vals[0]))
-            except: pass
+        if target_type == 'vmware':
+            cpu_walk = await snmp_walk(engine, ip, '1.3.6.1.2.1.25.3.3.1.2', credentials)
+            cpu_vals = [float(v) for v in cpu_walk.values() if v and str(v).strip()]
+            if cpu_vals:
+                try: db.record_cpu(ip, sum(cpu_vals) / len(cpu_vals))
+                except: pass
 
-        mem_names, mem_used, mem_free = await asyncio.gather(
-            snmp_walk(engine, ip, OID_MEM_POOL_NAME, community),
-            snmp_walk(engine, ip, OID_MEM_POOL_USED, community),
-            snmp_walk(engine, ip, OID_MEM_POOL_FREE, community)
-        )
-        for suffix, name in mem_names.items():
-            try:
-                used = int(mem_used.get(suffix, 0))
-                free = int(mem_free.get(suffix, 0))
-                if used > 0 or free > 0:
-                    db.record_memory(ip, name, used, free)
-            except: pass
+            storage_types, storage_descrs, storage_units, storage_sizes, storage_useds = await asyncio.gather(
+                snmp_walk(engine, ip, '1.3.6.1.2.1.25.2.3.1.2', credentials),
+                snmp_walk(engine, ip, '1.3.6.1.2.1.25.2.3.1.3', credentials),
+                snmp_walk(engine, ip, '1.3.6.1.2.1.25.2.3.1.4', credentials),
+                snmp_walk(engine, ip, '1.3.6.1.2.1.25.2.3.1.5', credentials),
+                snmp_walk(engine, ip, '1.3.6.1.2.1.25.2.3.1.6', credentials)
+            )
+            for suffix, stype in storage_types.items():
+                if '.1.3.6.1.2.1.25.2.2' in stype or 'hrStorageRam' in stype or 'memory' in storage_descrs.get(suffix, '').lower():
+                    try:
+                        units = int(storage_units.get(suffix, 0))
+                        size = int(storage_sizes.get(suffix, 0))
+                        used = int(storage_useds.get(suffix, 0))
+                        name = storage_descrs.get(suffix, 'Physical Memory')
+                        if units > 0 and size > 0:
+                            used_bytes = used * units
+                            free_bytes = (size - used) * units
+                            db.record_memory(ip, name, used_bytes, free_bytes)
+                    except: pass
+        else:
+            cpu_walk = await snmp_walk(engine, ip, OID_CPU, credentials)
+            cpu_vals = [v for v in cpu_walk.values() if v and str(v).strip()]
+            if cpu_vals:
+                try: db.record_cpu(ip, float(cpu_vals[0]))
+                except: pass
+
+            mem_names, mem_used, mem_free = await asyncio.gather(
+                snmp_walk(engine, ip, OID_MEM_POOL_NAME, credentials),
+                snmp_walk(engine, ip, OID_MEM_POOL_USED, credentials),
+                snmp_walk(engine, ip, OID_MEM_POOL_FREE, credentials)
+            )
+            for suffix, name in mem_names.items():
+                try:
+                    used = int(mem_used.get(suffix, 0))
+                    free = int(mem_free.get(suffix, 0))
+                    if used > 0 or free > 0:
+                        db.record_memory(ip, name, used, free)
+                except: pass
 
         m_tasks = [
-            snmp_walk(engine, ip, OID_IF_DESCR, community),
-            snmp_walk(engine, ip, OID_IF_ALIAS, community),
-            snmp_walk(engine, ip, OID_IF_OPER, community),
-            snmp_walk(engine, ip, OID_IF_ADMIN, community),
-            snmp_walk(engine, ip, OID_IF_SPEED, community),
-            snmp_walk(engine, ip, OID_IF_HC_IN, community),
-            snmp_walk(engine, ip, OID_IF_HC_OUT, community)
+            snmp_walk(engine, ip, OID_IF_DESCR, credentials),
+            snmp_walk(engine, ip, OID_IF_ALIAS, credentials),
+            snmp_walk(engine, ip, OID_IF_OPER, credentials),
+            snmp_walk(engine, ip, OID_IF_ADMIN, credentials),
+            snmp_walk(engine, ip, OID_IF_SPEED, credentials),
+            snmp_walk(engine, ip, OID_IF_HC_IN, credentials),
+            snmp_walk(engine, ip, OID_IF_HC_OUT, credentials)
         ]
         if_descrs, if_aliases, if_opers, if_admins, if_speeds, if_in, if_out = await asyncio.gather(*m_tasks)
 
         t_tasks = [
-            snmp_walk(engine, ip, OID_LLDP_REM_SYSNAME, community),
-            snmp_walk(engine, ip, OID_LLDP_REM_PORT, community),
-            snmp_walk(engine, ip, OID_CDP_REM_DEVICE, community),
-            snmp_walk(engine, ip, OID_CDP_REM_PORT, community)
+            snmp_walk(engine, ip, OID_LLDP_REM_SYSNAME, credentials),
+            snmp_walk(engine, ip, OID_LLDP_REM_PORT, credentials),
+            snmp_walk(engine, ip, OID_CDP_REM_DEVICE, credentials),
+            snmp_walk(engine, ip, OID_CDP_REM_PORT, credentials)
         ]
         lldp_names, lldp_ports, cdp_names, cdp_ports = await asyncio.gather(*t_tasks)
 
@@ -205,7 +267,7 @@ async def poll_device(engine, ip, community):
 async def run_cycle():
     engine = SnmpEngine()
     monitored = config.get('monitored_switches', [])
-    await asyncio.gather(*[poll_device(engine, s['ip'], s.get('community', config['snmp']['community'])) for s in monitored])
+    await asyncio.gather(*[poll_device(engine, s) for s in monitored])
     db.cleanup_old_records(config['history']['retention_days'])
     db.enforce_size_limit(max_mb=20)
 

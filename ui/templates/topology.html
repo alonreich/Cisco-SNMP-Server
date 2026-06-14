@@ -1,0 +1,471 @@
+{% extends "base.html" %}
+{% block title %}Logical Topology — SNMP Master{% endblock %}
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.6/standalone/umd/vis-network.min.js?v={{ range(1, 999) | random }}"></script>
+<style>
+    #topology_container {
+        width: 100%;
+        height: calc(100vh - 240px);
+        background: #1e293b;
+        background-image: radial-gradient(#334155 1px, transparent 1px);
+        background-size: 32px 32px;
+        border-radius: 1rem;
+        border: 1px solid #475569;
+        position: relative;
+        overflow: hidden;
+        cursor: grab !important;
+    }
+    #topology_container:active { cursor: grabbing !important; }
+    .vis-network { outline: none; }
+    .util-bar { transition: width 0.3s ease, background-color 0.3s ease; }
+
+    #device_filter {
+        background: #1e293b;
+        border: 1px solid #475569;
+        color: #cbd5e1;
+        border-radius: 0.75rem;
+        padding: 0.5rem 1rem;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        cursor: pointer;
+        outline: none;
+        transition: all 0.2s;
+    }
+    #device_filter:hover { border-color: #3b82f6; color: #ffffff; }
+    #device_filter:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.2); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+    <div>
+        <h1 class="text-sm font-bold text-white uppercase tracking-widest">Logical <span class="text-blue-300">Topology</span></h1>
+        <p class="text-[11px] text-slate-400 uppercase tracking-widest font-semibold mt-1">L2/L3 Physical Path Mapping via LLDP & CDP</p>
+    </div>
+    <div class="flex items-center gap-3">
+        <select id="device_filter" aria-label="Filter devices by type">
+            <option value="cisco" selected>Cisco Switches</option>
+            <option value="all">All</option>
+            <option value="vcsa">VCSA</option>
+            <option value="esxi">ESXI Hosts</option>
+        </select>
+        <button onclick="saveLayout()" class="btn btn-primary text-xs uppercase font-bold px-5">
+            <i class="fas fa-save mr-2"></i> Save State
+        </button>
+        <button onclick="refreshMap()" class="btn btn-secondary text-xs uppercase font-bold px-5">
+            <i class="fas fa-expand-arrows-alt mr-2"></i> Re-Layout
+        </button>
+    </div>
+</div>
+
+<div class="relative bg-surface-800 rounded-2xl border border-surface-700 shadow-2xl overflow-hidden">
+    <div id="topology_container"></div>
+    
+    <div class="absolute bottom-4 left-4 flex flex-wrap gap-4 bg-surface-900/90 backdrop-blur-md border border-surface-700 px-5 py-3 rounded-xl pointer-events-none select-none text-[11px] font-bold text-slate-300 uppercase tracking-tight shadow-xl">
+        <div class="flex items-center gap-2">
+            <span class="w-4 h-2.5 rounded-sm bg-accent border border-blue-300 shadow-[0_0_8px_rgba(59,130,246,0.6)]"></span> Network
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="w-4 h-4 rounded-sm bg-purple-700 border border-purple-400 shadow-[0_0_8px_rgba(167,139,250,0.4)]" style="clip-path: polygon(10% 0%, 90% 0%, 100% 40%, 90% 100%, 10% 100%, 0% 40%)"></span> Host
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="w-4 h-4 rounded-full bg-green-700 border border-green-400 shadow-[0_0_8px_rgba(34,197,94,0.4)]"></span> Instance
+        </div>
+        <div class="border-l border-surface-700 pl-4 flex gap-4">
+            <span class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-blue-600 shadow-[0_0_10px_#2563eb]"></span> Up</span>
+            <span class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_10px_#ef4444]"></span> Down</span>
+        </div>
+    </div>
+</div>
+
+<script>
+    let network = null;
+    let nodesDS = new vis.DataSet();
+    let edgesDS = new vis.DataSet();
+    const savedPositions = {{ positions | tojson if positions else '{}' }};
+
+    const vmwareImg = new Image();
+    vmwareImg.src = '/static/vmware_overlay.png';
+
+    let allDevices = [];
+    let allLinks = [];
+
+    function normalizeHostname(name) {
+        if (!name) return '';
+        return name.toLowerCase().trim().replace(/\.(bynetsec\.com|bynetsec\.local|local|com|net|org)$/, '');
+    }
+
+    function isDeviceMatch(d, remoteId) {
+        if (!remoteId) return false;
+        if (d.ip === remoteId) return true;
+        if (!d.hostname) return false;
+        return normalizeHostname(d.hostname) === normalizeHostname(remoteId);
+    }
+
+    function shortenIfName(name) {
+        if (!name) return '';
+        return name.replace(/FastEthernet/gi, 'Fa')
+                   .replace(/GigabitEthernet/gi, 'Gi')
+                   .replace(/TenGigabitEthernet/gi, 'Te')
+                   .replace(/Port-channel/gi, 'Po')
+                   .replace(/Vlan/gi, 'Vl');
+    }
+
+    function classifyDevice(d) {
+        const h = (d.hostname || '').toLowerCase();
+        const ip = d.ip || '';
+        if (h.includes('esxi')) return 'esxi';
+        const vcsaIPs = ['10.160.4.40', '10.160.4.14'];
+        if (vcsaIPs.includes(ip)) return 'vm';
+        if (d.target_type === 'vmware' && !h.includes('esxi')) return 'vm';
+        if (h === 'none' || h === '') return 'vm';
+        return 'switch';
+    }
+
+    function deviceCategory(d) {
+        const dtype = classifyDevice(d);
+        if (dtype === 'switch') return 'cisco';
+        return 'vmware';
+    }
+
+    function buildNodeSVG(dtype, statusColor, showVMware, ip, nodeBorder) {
+        const bg = '#1e293b'; // Hollow out the shape to match the container background
+        const fw = 2.5;
+        const W = 130, H = 35;
+        const content = `<rect x="${fw}" y="${fw}" width="${W - fw*2}" height="${H - fw*2}" rx="6" fill="${bg}" stroke="${nodeBorder || statusColor}" stroke-width="${fw}"/>
+            <circle cx="${W - 12}" cy="12" r="4" fill="${statusColor}" />
+            <text x="${W/2}" y="${H/2}" text-anchor="middle" dominant-baseline="central" fill="#ffffff" font-size="12" font-family="monospace" font-weight="bold">${ip}</text>`;
+        return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${content}</svg>`;
+    }
+
+    function nodeImage(dtype, statusColor, showVMware, ip, nodeBg) {
+        const svg = buildNodeSVG(dtype, statusColor, showVMware, ip, nodeBg);
+        return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    }
+
+    function buildNetwork(filterMode) {
+        const container = document.getElementById('topology_container');
+
+        let filteredDevices = allDevices;
+        if (filterMode === 'cisco') {
+            filteredDevices = allDevices.filter(d => classifyDevice(d) === 'switch');
+        } else if (filterMode === 'vcsa') {
+            filteredDevices = allDevices.filter(d => classifyDevice(d) === 'vm');
+        } else if (filterMode === 'esxi') {
+            filteredDevices = allDevices.filter(d => classifyDevice(d) === 'esxi');
+        }
+
+        const filteredIPs = new Set(filteredDevices.map(d => d.ip));
+
+        let filteredLinks = allLinks.filter(l => {
+            const fromVisible = filteredIPs.has(l.local_ip);
+            const remoteDevice = filteredDevices.find(d => isDeviceMatch(d, l.remote_id));
+            return fromVisible && remoteDevice;
+        });
+
+        const offlineDevices = filteredDevices.filter(d => d.status !== 'online');
+
+        const nodeItems = filteredDevices.map(d => {
+            const pos = savedPositions[d.ip] || {};
+            const isOffline = d.status !== 'online';
+            const statusColor = isOffline ? '#ef4444' : '#2563eb';
+            const dtype = classifyDevice(d);
+            const showVMware = (dtype === 'esxi' || dtype === 'vm');
+
+            let initialX = pos.x;
+            let initialY = pos.y;
+            if (isOffline) {
+                const offlineIndex = offlineDevices.indexOf(d);
+                initialX = -1000;
+                initialY = 150 + offlineIndex * 70;
+            } else if (initialX === undefined) {
+                if (dtype === 'switch') {
+                    initialX = 0;
+                    initialY = 0;
+                } else if (dtype === 'esxi') {
+                    initialX = 500;
+                    initialY = 0;
+                } else {
+                    initialX = 900;
+                    initialY = 0;
+                }
+            }
+
+            const hue = d.ip.split('.').reduce((acc, oct) => acc + parseInt(oct, 10), 0) * 47 % 360;
+            const nodeBorder = `hsl(${hue}, 80%, 65%)`; // Bright unique color for the exterior border
+
+            return {
+                id: d.ip,
+                x: initialX,
+                y: initialY,
+                fixed: isOffline ? { x: true, y: true } : false,
+                label: "",
+                labelOverride: dtype.toUpperCase(),
+                shape: 'image',
+                image: nodeImage(dtype, statusColor, showVMware, d.ip, nodeBorder),
+                size: 35,
+                statusColor: statusColor,
+                nodeBorder: nodeBorder,
+                textBg: nodeBorder,
+                color: { background: nodeBorder, border: nodeBorder }, // Ensures edges inherit this bright border color
+                borderWidth: 0,
+                shadow: { enabled: true, color: 'rgba(0,0,0,0.6)', size: 8, x: 0, y: 4 }
+            };
+        });
+
+        const edgeItems = [];
+        const processedPairs = new Set();
+
+        filteredLinks.forEach(l => {
+            const remoteDevice = filteredDevices.find(d => isDeviceMatch(d, l.remote_id));
+
+            if (remoteDevice && l.local_ip !== remoteDevice.ip) {
+                const pairId = [l.local_ip, remoteDevice.ip].sort().join('-');
+                if (!processedPairs.has(pairId)) {
+                    const localPortName = shortenIfName(l.local_port);
+                    const remotePortName = shortenIfName(l.remote_port);
+                    edgeItems.push({
+                        id: pairId,
+                        from: l.local_ip,
+                        to: remoteDevice.ip,
+                        title: `${localPortName} \u2194 ${remotePortName}`,
+                        localPort: localPortName,
+                        remotePort: remotePortName,
+                        arrows: { 
+                            to: { enabled: true, scaleFactor: 0.8, type: 'arrow' },
+                            from: { enabled: true, scaleFactor: 0.8, type: 'arrow' }
+                        },
+                        color: { inherit: 'both', opacity: 0.8 },
+                        width: 3, length: 320,
+                        smooth: { type: 'continuous', roundness: 0.2 }
+                    });
+
+                    processedPairs.add(pairId);
+                }
+            }
+        });
+
+        nodesDS.clear();
+        edgesDS.clear();
+        nodesDS.add(nodeItems);
+        edgesDS.add(edgeItems);
+
+        const hasPositions = Object.keys(savedPositions).length > 0;
+
+        const options = {
+            nodes: {
+                chosen: false,
+                shapeProperties: { 
+                    useBorderWithImage: false,
+                    useImageSize: true
+                }
+            },
+            edges: { 
+                chosen: false,
+                hoverWidth: 3, selectionWidth: 4
+            },
+            interaction: { 
+                hover: true, dragNodes: true, dragView: true, zoomView: true,
+                tooltipDelay: 200
+            },
+            physics: {
+                enabled: !hasPositions,
+                solver: 'forceAtlas2Based',
+                forceAtlas2Based: {
+                    gravitationalConstant: -400,
+                    centralGravity: 0.005,
+                    springLength: 300,
+                    springConstant: 0.04,
+                    damping: 0.5
+                },
+                stabilization: { iterations: 1000 }
+            }
+        };
+
+        if (network) network.destroy();
+        network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, options);
+
+        network.on("afterDrawing", (ctx) => {
+            const positions = network.getPositions();
+            nodesDS.forEach((nodeData) => {
+                const pos = positions[nodeData.id];
+                if (!pos) return;
+                const x = pos.x;
+                const y = pos.y;
+                const title = nodeData.labelOverride;
+                if (!title) return;
+
+                ctx.font = "bold 8.5px Inter, system-ui, sans-serif";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "bottom";
+
+                ctx.strokeStyle = "#1e293b";
+                ctx.lineWidth = 3;
+                ctx.strokeText(title, x, y - 28);
+
+                ctx.fillStyle = "#cbd5e1";
+                ctx.fillText(title, x, y - 28);
+            });
+
+            edgesDS.forEach((edgeData) => {
+                try {
+                    const fromId = edgeData.from;
+                    const toId = edgeData.to;
+                    
+                    const posFrom = positions[fromId];
+                    const posTo = positions[toId];
+                    if (!posFrom || !posTo) return;
+
+                    const xFrom = posFrom.x;
+                    const yFrom = posFrom.y;
+                    const xTo = posTo.x;
+                    const yTo = posTo.y;
+                    
+                    const dx = xTo - xFrom;
+                    const dy = yTo - yFrom;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist === 0) return;
+                    
+                    const ux = dx / dist;
+                    const uy = dy / dist;
+                    
+                    const a = 65;
+                    const b = 18;
+                    const r = 1.0 / Math.sqrt((ux * ux) / (a * a) + (uy * uy) / (b * b));
+                    
+                    // Push labels slightly away from the center, but prevent them from clustering onto the device boundaries.
+                    let offset = dist * 0.30;
+                    if (offset < r + 30) {
+                        // Fallback if the nodes are dragged too close to each other
+                        offset = Math.max(r + 20, (dist / 2) - 15);
+                    }
+                    
+                    const x1 = xFrom + ux * offset;
+                    const y1 = yFrom + uy * offset;
+                    const x2 = xTo - ux * offset;
+                    const y2 = yTo - uy * offset;
+                    
+                    ctx.font = "bold 9px monospace";
+                    ctx.textAlign = "center";
+                    ctx.textBaseline = "middle";
+
+                    const localPort = edgeData.localPort;
+                    const remotePort = edgeData.remotePort;
+
+                    const fromNodeData = nodesDS.get(fromId);
+                    const toNodeData = nodesDS.get(toId);
+                    const colorFrom = fromNodeData ? fromNodeData.nodeBorder : "#2563eb";
+                    const colorTo = toNodeData ? toNodeData.nodeBorder : "#2563eb";
+                    const textBgFrom = fromNodeData ? fromNodeData.textBg : "#93c5fd";
+                    const textBgTo = toNodeData ? toNodeData.textBg : "#c084fc";
+
+                    const px = -uy;
+                    const py = ux;
+
+                    const cx1 = x1 + px * 14;
+                    const cy1 = y1 + py * 14;
+                    const cx2 = x2 - px * 14;
+                    const cy2 = y2 - py * 14;
+
+                    if (localPort) {
+                        ctx.strokeStyle = "#475569";
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.moveTo(x1, y1);
+                        ctx.lineTo(cx1, cy1);
+                        ctx.stroke();
+
+                        const w = ctx.measureText(localPort).width + 6;
+                        ctx.fillStyle = "rgba(30, 41, 59, 0.85)";
+                        ctx.strokeStyle = colorFrom;
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        if (ctx.roundRect) {
+                            ctx.roundRect(cx1 - w / 2, cy1 - 7, w, 14, 3);
+                        } else {
+                            ctx.rect(cx1 - w / 2, cy1 - 7, w, 14);
+                        }
+                        ctx.fill();
+                        ctx.stroke();
+
+                        ctx.fillStyle = textBgFrom;
+                        ctx.fillText(localPort, cx1, cy1);
+                    }
+
+                    if (remotePort) {
+                        ctx.strokeStyle = "#475569";
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.moveTo(x2, y2);
+                        ctx.lineTo(cx2, cy2);
+                        ctx.stroke();
+
+                        const w = ctx.measureText(remotePort).width + 6;
+                        ctx.fillStyle = "rgba(30, 41, 59, 0.85)";
+                        ctx.strokeStyle = colorTo;
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        if (ctx.roundRect) {
+                            ctx.roundRect(cx2 - w / 2, cy2 - 7, w, 14, 3);
+                        } else {
+                            ctx.rect(cx2 - w / 2, cy2 - 7, w, 14);
+                        }
+                        ctx.fill();
+                        ctx.stroke();
+
+                        ctx.fillStyle = textBgTo;
+                        ctx.fillText(remotePort, cx2, cy2);
+                    }
+                } catch (err) {
+                    console.error("Error drawing edge labels:", err);
+                }
+            });
+        });
+
+        network.on("hoverNode", () => { container.style.setProperty('cursor', 'pointer', 'important'); });
+        network.on("blurNode", () => { container.style.setProperty('cursor', 'grab', 'important'); });
+        network.on("hoverEdge", () => { container.style.setProperty('cursor', 'pointer', 'important'); });
+        network.on("blurEdge", () => { container.style.setProperty('cursor', 'grab', 'important'); });
+        network.on("dragStart", (params) => { if (!params.nodes.length) container.style.setProperty('cursor', 'grabbing', 'important'); });
+        network.on("dragEnd", () => { container.style.setProperty('cursor', 'grab', 'important'); });
+        network.on("click", (params) => {
+            if (params.nodes.length > 0) {
+                showDetails(params.nodes[0]);
+            }
+        });
+    }
+
+    async function initTopology() {
+        const response = await fetch(`/api/topology?t=${Date.now()}`);
+        const data = await response.json();
+        
+        allDevices = data.devices;
+        allLinks = data.links;
+
+        const filter = document.getElementById('device_filter').value;
+        buildNetwork(filter);
+    }
+
+    document.getElementById('device_filter').addEventListener('change', function() {
+        buildNetwork(this.value);
+    });
+
+    function saveLayout() {
+        const pos = network.getPositions();
+        fetch('/api/topology/positions', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(pos)
+        }).then(() => alert('Layout saved.'));
+    }
+
+    function refreshMap() {
+        network.setOptions({ physics: { enabled: true } });
+        setTimeout(() => network.setOptions({ physics: { enabled: false } }), 5000);
+    }
+
+    document.addEventListener('DOMContentLoaded', initTopology);
+</script>
+{% endblock %}

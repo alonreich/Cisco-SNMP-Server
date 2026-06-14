@@ -1,242 +1,350 @@
 {% extends "base.html" %}
-{% block title %}CPU Intelligence — SNMP Master{% endblock %}
+{% block title %}CPU Intelligence & Telemetry Analytics — SNMP Master{% endblock %}
 {% block extra_head %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<style>
+    .device-row {
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    .device-row:hover {
+        background: #334155;
+    }
+    .device-row.active {
+        background: rgba(59,130,246,0.1);
+        border-color: #3b82f6;
+    }
+    .stat-card {
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 1rem;
+        padding: 1.25rem;
+        text-align: center;
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+    }
+</style>
 {% endblock %}
 
 {% block content %}
-<div class="bg-surface-800 rounded-2xl border border-surface-700 shadow-2xl p-6 mb-8">
-    <div class="flex flex-wrap items-center justify-between gap-6 mb-8">
+<div class="px-6 py-4 mb-6 bg-surface-800 rounded-2xl border border-surface-700 shadow-xl">
+    <div class="flex flex-wrap items-center justify-between gap-6">
         <div class="flex items-center gap-4">
             <div class="p-2 bg-accent/10 rounded-xl">
                 <i class="fas fa-microchip text-accent text-base"></i>
             </div>
             <div>
                 <h2 class="text-sm font-bold text-white uppercase tracking-widest">CPU <span class="text-blue-300">Intelligence</span></h2>
-                <p class="text-[10px] text-slate-400 uppercase font-bold tracking-widest mt-0.5">Real-time Processor Load Analysis</p>
+                <p class="text-[10px] text-slate-400 uppercase font-bold tracking-widest mt-0.5">Enterprise Processor Load & Telemetry Analytics</p>
             </div>
         </div>
-        
         <div class="flex items-center gap-4">
-            <div class="relative">
-                <i class="fas fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
-                <input type="text" id="device_search" placeholder="Filter devices..." 
-                       class="w-56 pl-10 bg-surface-900 border border-surface-700 rounded-xl px-4 py-2 text-sm text-white focus:ring-2 focus:ring-accent/40" 
-                       oninput="filterDeviceSelect()" aria-label="Search device">
-            </div>
-            <select id="device_select" aria-label="Select device to monitor" 
-                    class="w-64 bg-surface-900 border border-surface-700 rounded-xl px-4 py-2 text-sm text-white"
-                    onchange="loadCpuData()">
-                {% for ip, device in devices.items() %}
-                {% if device.target_type != 'vmware' %}
-                <option value="{{ ip }}" data-hostname="{{ device.hostname }}">{{ device.hostname or ip }} (${{ ip }})</option>
-                {% endif %}
-                {% endfor %}
-            </select>
-            <button onclick="exportCSV()" class="btn btn-secondary text-xs uppercase font-bold py-2 px-5" aria-label="Export CPU data as CSV">
+            <button onclick="exportCSV()" class="btn btn-secondary text-xs uppercase font-bold py-2 px-5">
                 <i class="fas fa-download mr-2 opacity-60"></i> Export Dataset
             </button>
         </div>
     </div>
-
-    <!-- Time ranges -->
-    <div class="flex items-center gap-3 mb-8" role="group" aria-label="Time range selection">
-        <span class="text-xs font-bold text-slate-500 uppercase tracking-widest mr-2">Time Window:</span>
-        <button onclick="setRange(1)" class="btn btn-secondary text-xs range-btn ring-2 ring-accent" aria-pressed="true">1 Hour</button>
-        <button onclick="setRange(6)" class="btn btn-secondary text-xs range-btn" aria-pressed="false">6 Hours</button>
-        <button onclick="setRange(24)" class="btn btn-secondary text-xs range-btn" aria-pressed="false">24 Hours</button>
-        <button onclick="setRange(168)" class="btn btn-secondary text-xs range-btn" aria-pressed="false">7 Days</button>
-    </div>
-
-    <!-- Stats panel -->
-    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-        <div class="bg-surface-900 rounded-2xl border border-surface-700 p-5 text-center shadow-inner">
-            <div id="current_cpu" class="text-3xl font-black text-slate-400">--</div>
-            <div class="text-[10px] text-slate-500 uppercase font-black tracking-widest mt-2">Current Utilization</div>
-        </div>
-        <div class="bg-surface-900 rounded-2xl border border-surface-700 p-5 text-center shadow-inner">
-            <div id="avg_cpu" class="text-xl font-bold text-slate-300">--</div>
-            <div class="text-[10px] text-slate-500 uppercase font-bold tracking-widest mt-2">Window Average</div>
-        </div>
-        <div class="bg-surface-900 rounded-2xl border border-surface-700 p-5 text-center shadow-inner">
-            <div id="max_cpu" class="text-xl font-bold text-slate-300">--</div>
-            <div class="text-[10px] text-slate-500 uppercase font-bold tracking-widest mt-2">Peak Observed</div>
-        </div>
-        <div class="bg-surface-900 rounded-2xl border border-surface-700 p-5 text-center shadow-inner">
-            <div id="min_cpu" class="text-xl font-bold text-slate-300">--</div>
-            <div class="text-[10px] text-slate-500 uppercase font-bold tracking-widest mt-2">Floor Observed</div>
-        </div>
-        <div class="bg-surface-900 rounded-2xl border border-surface-700 p-5 text-center shadow-inner">
-            <div id="samples" class="text-xl font-bold text-slate-300">--</div>
-            <div class="text-[10px] text-slate-500 uppercase font-bold tracking-widest mt-2">Data Samples</div>
-        </div>
-    </div>
-
-    <!-- Chart -->
-    <div class="bg-surface-900 rounded-2xl border border-surface-700 p-6 shadow-inner" style="height: 420px;">
-        <canvas id="cpu_chart"></canvas>
-    </div>
-
-    <!-- No data notice -->
-    <div id="no_data_notice" class="hidden mt-6 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-xl">
-        <p class="text-xs text-yellow-400 font-bold leading-relaxed">
-            <i class="fas fa-exclamation-triangle mr-2"></i> TELEMETRY GAP: No processor data available for this target. Note that CPU monitoring requires Cisco-specific OIDs (cpmCPUTotalMonTable) — non-Cisco infrastructure (ESXi, VCSA) will not populate these metrics.
-        </p>
-    </div>
 </div>
 
-<!-- Alert History -->
-<div class="bg-surface-800 rounded-2xl border border-surface-700 shadow-2xl p-6">
-    <div class="flex items-center gap-3 mb-4">
-        <i class="fas fa-bell text-red-400 text-xs"></i>
-        <h3 class="text-xs font-bold text-slate-200 uppercase tracking-widest">Recent Processor Anomalies</h3>
+<div class="grid grid-cols-12 gap-6">
+    <div class="col-span-12 lg:col-span-3 bg-surface-800 p-5 rounded-2xl border border-surface-700 shadow-xl">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-xs font-bold text-slate-200 uppercase tracking-widest">Monitored Targets</h3>
+            <span id="device_count_badge" class="px-2 py-0.5 bg-surface-900 border border-surface-700 text-slate-400 text-[9px] font-black rounded-full">0/0</span>
+        </div>
+        <div class="relative mb-4">
+            <i class="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
+            <input type="text" id="device_search" placeholder="Search hosts..." class="w-full pl-9 bg-surface-900 border border-surface-700 rounded-xl px-3 py-1.5 text-xs text-white focus:ring-2 focus:ring-accent/40" oninput="filterDevices()">
+        </div>
+        <div id="device_list" class="space-y-1.5 max-h-[600px] overflow-y-auto pr-1 custom-scrollbar">
+            {% for ip, device in devices.items() %}
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="{{ ip }}" data-hostname="{{ device.hostname or ip }}" onclick="toggleDevice('{{ ip }}')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_{{ ip }}" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">{{ device.hostname or ip }}</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">{{ ip }}</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase {% if device.status == 'online' %}bg-green-500/10 border border-green-500/20 text-green-400{% else %}bg-red-500/10 border border-red-500/20 text-red-400{% endif %}">{{ device.status }}</span>
+            </div>
+            {% endfor %}
+        </div>
     </div>
-    <div id="alert_list" class="space-y-2 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
-        <p class="text-sm text-slate-500 italic">No critical anomalies detected in the current window.</p>
+
+    <div class="col-span-12 lg:col-span-9 space-y-6">
+        <div class="bg-surface-800 p-6 rounded-2xl border border-surface-700 shadow-xl">
+            <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
+                <div class="flex items-center gap-3" role="group" aria-label="Time range selection">
+                    <span class="text-xs font-bold text-slate-400 uppercase tracking-widest">Time Window:</span>
+                    <button onclick="setRange(1)" class="btn btn-secondary text-xs range-btn ring-2 ring-accent">1 Hour</button>
+                    <button onclick="setRange(6)" class="btn btn-secondary text-xs range-btn">6 Hours</button>
+                    <button onclick="setRange(24)" class="btn btn-secondary text-xs range-btn">24 Hours</button>
+                    <button onclick="setRange(168)" class="btn btn-secondary text-xs range-btn">7 Days</button>
+                </div>
+                <div id="focused_device_title" class="text-xs font-bold text-accent uppercase tracking-widest"></div>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
+                <div class="stat-card">
+                    <div id="stat_current" class="text-2xl font-black text-slate-400">--</div>
+                    <div class="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">Current</div>
+                </div>
+                <div class="stat-card">
+                    <div id="stat_avg" class="text-2xl font-black text-white">--</div>
+                    <div class="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">Average</div>
+                </div>
+                <div class="stat-card">
+                    <div id="stat_max" class="text-2xl font-black text-white">--</div>
+                    <div class="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">Peak Load</div>
+                </div>
+                <div class="stat-card">
+                    <div id="stat_min" class="text-2xl font-black text-white">--</div>
+                    <div class="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">Floor Load</div>
+                </div>
+                <div class="stat-card">
+                    <div id="stat_p95" class="text-2xl font-black text-white">--</div>
+                    <div class="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">95th Percentile</div>
+                </div>
+                <div class="stat-card">
+                    <div id="stat_stddev" class="text-2xl font-black text-white">--</div>
+                    <div class="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">Std Deviation</div>
+                </div>
+            </div>
+
+            <div class="bg-surface-900 rounded-2xl border border-surface-700 p-6 shadow-inner" style="height: 400px;">
+                <canvas id="cpu_chart"></canvas>
+            </div>
+        </div>
+
+        <div class="bg-surface-800 p-6 rounded-2xl border border-surface-700 shadow-xl">
+            <div class="flex items-center gap-3 mb-4">
+                <i class="fas fa-bell text-red-400 text-xs"></i>
+                <h3 class="text-xs font-bold text-slate-200 uppercase tracking-widest">Anomaly & Storm Logs</h3>
+            </div>
+            <div id="alert_list" class="space-y-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+                <p class="text-sm text-slate-300 italic">Select a target device to scan anomaly logs.</p>
+            </div>
+        </div>
     </div>
 </div>
 
 <script>
 let currentRange = 1;
-let cpuChart = null;
-const warningThreshold = {{ config.get('alerts', {}).get('cpu_warning', 70) }};
-const criticalThreshold = {{ config.get('alerts', {}).get('cpu_critical', 90) }};
+let chart = null;
+let selectedDevices = [];
+const deviceData = {};
 
-function filterDeviceSelect() {
+const colorPalette = [
+    '#3b82f6', '#a78bfa', '#14b8a6', '#f59e0b', '#ef4444',
+    '#10b981', '#ec4899', '#6366f1', '#84cc16', '#06b6d4'
+];
+
+function filterDevices() {
     const search = document.getElementById('device_search').value.toLowerCase();
-    const sel = document.getElementById('device_select');
-    for (let opt of sel.options) {
-        const match = opt.textContent.toLowerCase().includes(search) || opt.value.includes(search);
-        opt.style.display = match ? '' : 'none';
+    document.querySelectorAll('.device-row').forEach(row => {
+        const text = row.getAttribute('data-hostname').toLowerCase() + ' ' + row.getAttribute('data-ip');
+        row.style.setProperty('display', text.includes(search) ? 'flex' : 'none', 'important');
+    });
+}
+
+function updateBadge() {
+    const total = document.querySelectorAll('.device-row').length;
+    document.getElementById('device_count_badge').textContent = `${selectedDevices.length}/${total}`;
+}
+
+function toggleDevice(ip) {
+    const idx = selectedDevices.indexOf(ip);
+    const row = document.querySelector(`.device-row[data-ip="${ip}"]`);
+    const chk = document.getElementById(`chk_${ip}`);
+    
+    if (idx === -1) {
+        selectedDevices.push(ip);
+        row.classList.add('active');
+        if (chk) chk.checked = true;
+    } else {
+        selectedDevices.splice(idx, 1);
+        row.classList.remove('active');
+        if (chk) chk.checked = false;
     }
+    
+    updateBadge();
+    loadChartData();
 }
 
 function setRange(hours) {
     currentRange = hours;
-    document.querySelectorAll('.range-btn').forEach(b => {
-        b.classList.remove('ring-2', 'ring-accent');
-        b.setAttribute('aria-pressed', 'false');
-    });
+    document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('ring-2', 'ring-accent'));
     const active = document.querySelector(`.range-btn[onclick="setRange(${hours})"]`);
-    if (active) {
-        active.classList.add('ring-2', 'ring-accent');
-        active.setAttribute('aria-pressed', 'true');
-    }
-    loadCpuData();
+    if (active) active.classList.add('ring-2', 'ring-accent');
+    loadChartData();
 }
 
-function loadCpuData() {
-    const ip = document.getElementById('device_select').value;
-    const noDataNotice = document.getElementById('no_data_notice');
+function loadChartData() {
+    if (selectedDevices.length === 0) {
+        if (chart) {
+            chart.destroy();
+            chart = null;
+        }
+        clearStats();
+        return;
+    }
 
-    fetch(`/api/device/${encodeURIComponent(ip)}/history?metric=cpu&hours=${currentRange}`)
+    const promises = selectedDevices.map(ip => 
+        fetch(`/api/device/${encodeURIComponent(ip)}/history?metric=cpu&hours=${currentRange}`)
+            .then(r => r.json())
+            .then(res => {
+                deviceData[ip] = res.data || [];
+            })
+    );
+
+    Promise.all(promises).then(() => {
+        renderChart();
+        updateStats();
+        loadAlerts();
+    });
+}
+
+function clearStats() {
+    document.getElementById('stat_current').textContent = '--';
+    document.getElementById('stat_avg').textContent = '--';
+    document.getElementById('stat_max').textContent = '--';
+    document.getElementById('stat_min').textContent = '--';
+    document.getElementById('stat_p95').textContent = '--';
+    document.getElementById('stat_stddev').textContent = '--';
+    document.getElementById('focused_device_title').textContent = '';
+}
+
+function updateStats() {
+    const primaryIp = selectedDevices[0];
+    const data = deviceData[primaryIp] || [];
+    if (data.length === 0) {
+        clearStats();
+        return;
+    }
+
+    const values = data.map(d => d[1]);
+    const hostname = document.querySelector(`.device-row[data-ip="${primaryIp}"]`).getAttribute('data-hostname');
+    document.getElementById('focused_device_title').textContent = `Focused: ${hostname} (${primaryIp})`;
+
+    const cur = values[values.length - 1];
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    const maxVal = Math.max(...values);
+    const minVal = Math.min(...values);
+
+    const sorted = [...values].sort((a, b) => a - b);
+    const p95Idx = Math.floor(sorted.length * 0.95);
+    const p95 = sorted[p95Idx];
+
+    const variance = values.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / values.length;
+    const stddev = Math.sqrt(variance);
+
+    const el = document.getElementById('stat_current');
+    el.textContent = cur.toFixed(1) + '%';
+    el.className = 'text-2xl font-black ' + (cur >= 90 ? 'text-red-400' : cur >= 70 ? 'text-yellow-400' : 'text-green-400');
+
+    document.getElementById('stat_avg').textContent = avg.toFixed(1) + '%';
+    document.getElementById('stat_max').textContent = maxVal.toFixed(1) + '%';
+    document.getElementById('stat_min').textContent = minVal.toFixed(1) + '%';
+    document.getElementById('stat_p95').textContent = p95.toFixed(1) + '%';
+    document.getElementById('stat_stddev').textContent = stddev.toFixed(1) + '%';
+}
+
+function loadAlerts() {
+    const list = document.getElementById('alert_list');
+    const primaryIp = selectedDevices[0];
+    if (!primaryIp) {
+        list.innerHTML = '<p class="text-sm text-slate-300 italic">Select a target device to scan anomaly logs.</p>';
+        return;
+    }
+
+    fetch(`/api/alerts?ip=${encodeURIComponent(primaryIp)}&limit=20`)
         .then(r => r.json())
-        .then(result => {
-            const data = result.data || [];
-            if (data.length === 0) {
-                document.getElementById('current_cpu').textContent = 'N/A';
-                document.getElementById('avg_cpu').textContent = '--';
-                document.getElementById('max_cpu').textContent = '--';
-                document.getElementById('min_cpu').textContent = '--';
-                document.getElementById('samples').textContent = '0';
-                noDataNotice.classList.remove('hidden');
-                if (cpuChart) { cpuChart.destroy(); cpuChart = null; }
+        .then(data => {
+            const alerts = (data.alerts || []).filter(a => a.alert_type && a.alert_type.startsWith('cpu'));
+            if (alerts.length === 0) {
+                list.innerHTML = '<p class="text-sm text-slate-300 italic">No anomalies detected in the current window.</p>';
                 return;
             }
-            noDataNotice.classList.add('hidden');
-
-            const labels = data.map(d => d[0].substring(11, 19));
-            const values = data.map(d => d[1]);
-
-            const cur = values[values.length - 1];
-            const el = document.getElementById('current_cpu');
-            el.textContent = cur.toFixed(1) + '%';
-            el.className = 'text-3xl font-black ' + (cur >= criticalThreshold ? 'text-red-400' : cur >= warningThreshold ? 'text-yellow-400' : 'text-green-400');
-
-            document.getElementById('min_cpu').textContent = Math.min(...values).toFixed(1) + '%';
-            document.getElementById('max_cpu').textContent = Math.max(...values).toFixed(1) + '%';
-            document.getElementById('avg_cpu').textContent = (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1) + '%';
-            document.getElementById('samples').textContent = values.length;
-
-            if (cpuChart) cpuChart.destroy();
-            const ctx = document.getElementById('cpu_chart').getContext('2d');
-            cpuChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels,
-                    datasets: [{
-                        label: 'CPU Load %',
-                        data: values,
-                        borderColor: '#3b82f6',
-                        backgroundColor: (ctx2) => {
-                            const g = ctx2.chart.ctx.createLinearGradient(0, 0, 0, 400);
-                            g.addColorStop(0, 'rgba(59,130,246,0.3)');
-                            g.addColorStop(1, 'rgba(59,130,246,0.01)');
-                            return g;
-                        },
-                        fill: true, tension: 0.4, pointRadius: 0, borderWidth: 3
-                    }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    scales: {
-                        x: { ticks: { color: '#94a3b8', maxTicksLimit: 12, font: { size: 11, weight: 'bold' } }, grid: { color: 'rgba(71,85,105,0.3)' } },
-                        y: { min: 0, max: 100, ticks: { color: '#94a3b8', font: { size: 11, weight: 'bold' } }, grid: { color: 'rgba(71,85,105,0.3)' } }
-                    },
-                    plugins: {
-                        legend: { labels: { color: '#f1f5f9', font: { size: 12, weight: 'bold' } } },
-                        annotation: {
-                            annotations: {
-                                warningLine: { type: 'line', yMin: warningThreshold, yMax: warningThreshold,
-                                    borderColor: '#eab308cc', borderWidth: 2, borderDash: [8,4],
-                                    label: { display: true, content: `WARN: ${warningThreshold}%`, position: 'start', backgroundColor: '#eab308', color: '#000', font: { size: 10, weight: 'bold' } } },
-                                criticalLine: { type: 'line', yMin: criticalThreshold, yMax: criticalThreshold,
-                                    borderColor: '#ef4444cc', borderWidth: 2, borderDash: [8,4],
-                                    label: { display: true, content: `CRIT: ${criticalThreshold}%`, position: 'start', backgroundColor: '#ef4444', color: '#fff', font: { size: 10, weight: 'bold' } } }
-                            }
-                        }
-                    }
-                }
-            });
-        })
-        .catch(err => {
-            console.error('CPU fetch error:', err);
-            document.getElementById('current_cpu').textContent = 'ERR';
+            list.innerHTML = alerts.map(a =>
+                `<div class="text-xs p-3 rounded-xl ${a.severity === 'critical' ? 'bg-red-500/10 text-red-200 border border-red-500/20' : 'bg-yellow-500/10 text-yellow-200 border border-yellow-500/20'}">
+                    <span class="font-mono text-slate-300 font-bold mr-3">${escapeHtml(a.timestamp.substring(11, 19))}</span> ${escapeHtml(a.message)}
+                </div>`
+            ).join('');
         });
+}
 
-    // Load alerts
-    fetch(`/api/alerts?ip=${encodeURIComponent(ip)}&limit=20`).then(r => r.json()).then(data => {
-        const list = document.getElementById('alert_list');
-        const alerts = (data.alerts || []).filter(a => a.alert_type && a.alert_type.startsWith('cpu'));
-        if (alerts.length === 0) { list.innerHTML = '<p class="text-sm text-slate-500 italic">No processor anomalies detected in the current window.</p>'; return; }
-        list.innerHTML = alerts.map(a =>
-            `<div class="text-sm p-4 rounded-xl shadow-sm ${a.severity === 'critical' ? 'bg-red-500/10 text-red-200 border border-red-500/20' : 'bg-yellow-500/10 text-yellow-200 border border-yellow-500/20'}">
-                <span class="font-mono text-slate-500 font-bold mr-3">${escapeHtml(a.timestamp ? a.timestamp.substring(11, 19) : '')}</span> ${escapeHtml(a.message)}
-            </div>`
-        ).join('');
+function renderChart() {
+    if (chart) chart.destroy();
+
+    const datasets = selectedDevices.map((ip, i) => {
+        const hostname = document.querySelector(`.device-row[data-ip="${ip}"]`).getAttribute('data-hostname');
+        const data = deviceData[ip] || [];
+        const color = colorPalette[i % colorPalette.length];
+        return {
+            label: hostname,
+            data: data.map(d => ({ x: d[0].substring(11, 19), y: d[1] })),
+            borderColor: color,
+            backgroundColor: color + '15',
+            fill: selectedDevices.length === 1,
+            tension: 0.4,
+            pointRadius: 0,
+            borderWidth: 2.5
+        };
+    });
+
+    let labels = [];
+    if (selectedDevices.length > 0) {
+        const primaryIp = selectedDevices[0];
+        labels = (deviceData[primaryIp] || []).map(d => d[0].substring(11, 19));
+    }
+
+    const ctx = document.getElementById('cpu_chart').getContext('2d');
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+                x: { ticks: { color: '#94a3b8', maxTicksLimit: 12, font: { size: 10, weight: 'bold' } }, grid: { color: 'rgba(71,85,105,0.2)' } },
+                y: { min: 0, max: 100, ticks: { color: '#94a3b8', font: { size: 10, weight: 'bold' } }, grid: { color: 'rgba(71,85,105,0.2)' } }
+            },
+            plugins: {
+                legend: { position: 'top', labels: { color: '#f1f5f9', font: { size: 11, weight: 'bold' } } }
+            }
+        }
     });
 }
 
 function exportCSV() {
-    const ip = document.getElementById('device_select').value;
-    fetch(`/api/device/${encodeURIComponent(ip)}/history?metric=cpu&hours=${currentRange}`)
-        .then(r => r.json())
-        .then(result => {
-            const data = result.data || [];
-            if (data.length === 0) { alert('No data to export'); return; }
-            let csv = 'Timestamp,CPU %\n';
-            data.forEach(d => csv += `${d[0]},${d[1]}\n`);
-            const blob = new Blob([csv], { type: 'text/csv' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = `cpu_${ip}_${currentRange}h.csv`; a.click();
-            URL.revokeObjectURL(url);
+    if (selectedDevices.length === 0) {
+        alert('Select at least one device');
+        return;
+    }
+    let csv = 'Timestamp,Device,CPU %\n';
+    selectedDevices.forEach(ip => {
+        const hostname = document.querySelector(`.device-row[data-ip="${ip}"]`).getAttribute('data-hostname');
+        const data = deviceData[ip] || [];
+        data.forEach(d => {
+            csv += `${d[0]},${hostname},${d[1]}\n`;
         });
+    });
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cpu_analytics_${currentRange}h.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
 }
 
-document.addEventListener('DOMContentLoaded', loadCpuData);
-setInterval(loadCpuData, 30000);
-socket.on('device_update', () => loadCpuData());
+document.addEventListener('DOMContentLoaded', () => {
+    const firstRow = document.querySelector('.device-row');
+    if (firstRow) {
+        toggleDevice(firstRow.getAttribute('data-ip'));
+    }
+});
 </script>
 {% endblock %}

@@ -1,3 +1,5 @@
+import sys
+sys.dont_write_bytecode = True
 import sqlite3
 import os
 import time
@@ -153,7 +155,13 @@ class HistoryDB:
     def get_topology(self):
         conn = self.get_connection()
         try:
-            rows = conn.execute("SELECT * FROM topology").fetchall()
+            max_seen_row = conn.execute("SELECT max(last_seen) FROM topology").fetchone()
+            if max_seen_row and max_seen_row[0]:
+                max_seen = datetime.fromisoformat(max_seen_row[0])
+                cutoff = (max_seen - timedelta(minutes=5)).isoformat()
+                rows = conn.execute("SELECT * FROM topology WHERE last_seen >= ?", (cutoff,)).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM topology").fetchall()
             return [self._to_dict(row) for row in rows]
         except Exception as e:
             logging.error(f"Error fetching topology: {e}")
