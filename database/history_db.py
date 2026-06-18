@@ -99,6 +99,14 @@ class HistoryDB:
                 PRIMARY KEY (local_ip, local_port)
             )''')
 
+            c.execute('''CREATE TABLE IF NOT EXISTS port_channels (
+                device_ip TEXT NOT NULL,
+                phys_ifindex TEXT NOT NULL,
+                po_ifindex TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                PRIMARY KEY (device_ip, phys_ifindex)
+            )''')
+
             # Create indexes for faster history queries
             c.execute('CREATE INDEX IF NOT EXISTS idx_cpu_device_time ON cpu_history(device_ip, timestamp)')
             c.execute('CREATE INDEX IF NOT EXISTS idx_if_device_time ON interface_history(device_ip, timestamp)')
@@ -149,6 +157,36 @@ class HistoryDB:
             conn.commit()
         except Exception as e:
             logging.error(f"Error recording neighbor for {local_ip}: {e}")
+        finally:
+            conn.close()
+
+    def record_port_channel(self, device_ip, phys_ifindex, po_ifindex):
+        conn = self.get_connection()
+        try:
+            conn.execute(
+                """INSERT INTO port_channels (device_ip, phys_ifindex, po_ifindex, last_seen)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(device_ip, phys_ifindex) DO UPDATE SET
+                   po_ifindex=excluded.po_ifindex, last_seen=excluded.last_seen""",
+                (device_ip, phys_ifindex, po_ifindex, datetime.now().isoformat())
+            )
+            conn.commit()
+        except Exception as e:
+            logging.error(f"Error recording port-channel for {device_ip}: {e}")
+        finally:
+            conn.close()
+
+    def get_port_channels(self, device_ip=None):
+        conn = self.get_connection()
+        try:
+            if device_ip:
+                rows = conn.execute("SELECT * FROM port_channels WHERE device_ip=?", (device_ip,)).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM port_channels").fetchall()
+            return [self._to_dict(row) for row in rows]
+        except Exception as e:
+            logging.error(f"Error fetching port-channels: {e}")
+            return []
         finally:
             conn.close()
 
@@ -262,6 +300,22 @@ class HistoryDB:
             return [[row[0], row[1]] for row in rows]
         except Exception as e:
             logging.error(f"Error fetching CPU history for {device_ip}: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def get_memory_history(self, device_ip, hours=1):
+        conn = self.get_connection()
+        try:
+            since = (datetime.now() - timedelta(hours=hours)).isoformat()
+            rows = conn.execute(
+                "SELECT timestamp, (used_bytes*100.0/(used_bytes+free_bytes)) as pct, pool_name, used_bytes, free_bytes "
+                "FROM memory_history WHERE device_ip=? AND timestamp>? ORDER BY timestamp",
+                (device_ip, since)
+            ).fetchall()
+            return [list(r) for r in rows]
+        except Exception as e:
+            logging.error(f"Error fetching memory history for {device_ip}: {e}")
             return []
         finally:
             conn.close()

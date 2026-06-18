@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block title %}Device Management — SNMP Master{% endblock %}
+
+{% block content %}
+<div class="px-6 py-4 mb-6 bg-surface-800 rounded-2xl border border-surface-700 shadow-xl">
+    <div class="flex flex-wrap items-center justify-between gap-6">
+        <div class="flex items-center gap-4">
+            <div class="p-2 bg-accent/10 rounded-xl">
+                <i class="fas fa-edit text-accent text-base"></i>
+            </div>
+            <div>
+                <h2 class="text-sm font-bold text-white uppercase tracking-widest">Device Management</h2>
+                <p class="text-[10px] text-slate-400 uppercase font-bold tracking-widest mt-0.5">Add, Edit, or Remove Monitored SNMP Targets</p>
+            </div>
+        </div>
+        <button onclick="showAddModal()" class="btn btn-primary text-xs uppercase font-bold py-2 px-5">
+            <i class="fas fa-plus-circle mr-2"></i> Add New Device
+        </button>
+    </div>
+</div>
+
+<div class="bg-surface-800 rounded-xl border border-surface-700 shadow-xl overflow-hidden">
+    <table class="w-full text-sm">
+        <thead>
+            <tr class="text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-surface-900/60">
+                <th class="px-4 py-2 text-left align-middle">IP Address</th>
+                <th class="px-4 py-2 text-left align-middle">SNMP Version</th>
+                <th class="px-4 py-2 text-left align-middle">Community / User</th>
+                <th class="px-4 py-2 text-left align-middle">Target Type</th>
+                <th class="px-4 py-2 text-center align-middle">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="devices_tbody">
+            <!-- Rows will be rendered by JavaScript -->
+        </tbody>
+    </table>
+</div>
+
+<!-- Modal -->
+<div id="device_modal" class="fixed inset-0 bg-black/60 z-50 hidden items-center justify-center" onclick="closeModal()">
+    <div class="bg-surface-800 border border-surface-700 rounded-2xl shadow-2xl w-full max-w-lg" onclick="event.stopPropagation()">
+        <form id="device_form" onsubmit="saveDevice(event)">
+            <input type="hidden" id="original_ip" name="original_ip">
+            <div class="p-6 border-b border-surface-700">
+                <h3 id="modal_title" class="text-lg font-bold text-white">Add New Device</h3>
+            </div>
+            <div class="p-6 space-y-4">
+                <div>
+                    <label for="ip" class="label">IP Address</label>
+                    <input type="text" id="ip" name="ip" class="input" required>
+                </div>
+                <div>
+                    <label class="label">SNMP Version</label>
+                    <div class="flex gap-4">
+                        <label class="flex items-center gap-2">
+                            <input type="radio" name="snmp_version" value="2c" checked onchange="toggleVersionFields()"> v2c
+                        </label>
+                        <label class="flex items-center gap-2">
+                            <input type="radio" name="snmp_version" value="3" onchange="toggleVersionFields()"> v3
+                        </label>
+                    </div>
+                </div>
+                <div id="v2c_fields">
+                    <label for="community" class="label">Community String</label>
+                    <input type="text" id="community" name="community" class="input">
+                </div>
+                <div id="v3_fields" class="hidden space-y-4">
+                    <div>
+                        <label for="user" class="label">Username</label>
+                        <input type="text" id="user" name="user" class="input">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label for="auth_protocol" class="label">Auth Protocol</label>
+                            <select id="auth_protocol" name="auth_protocol" class="input">
+                                <option value="sha">SHA</option>
+                                <option value="md5">MD5</option>
+                            </select>
+                        </div>
+                         <div>
+                            <label for="auth_key" class="label">Auth Key</label>
+                            <input type="password" id="auth_key" name="auth_key" class="input">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label for="priv_protocol" class="label">Priv Protocol</label>
+                            <select id="priv_protocol" name="priv_protocol" class="input">
+                                <option value="aes">AES</option>
+                                <option value="des">DES</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="priv_key" class="label">Priv Key</label>
+                            <input type="password" id="priv_key" name="priv_key" class="input">
+                        </div>
+                    </div>
+                </div>
+                <div>
+                    <label for="target_type" class="label">Target Type</label>
+                    <select id="target_type" name="target_type" class="input">
+                        <option value="cisco">Cisco Switch</option>
+                        <option value="vmware">VMware ESXi</option>
+                    </select>
+                </div>
+            </div>
+            <div class="p-4 bg-surface-900/40 flex justify-end gap-3 rounded-b-2xl">
+                <button type="button" onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Device</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<style>
+    .label {
+        @apply block text-xs font-bold text-slate-400 uppercase mb-1;
+    }
+    .input {
+        @apply w-full bg-surface-900 border border-surface-700 rounded-xl px-3 py-1.5 text-sm text-white focus:ring-2 focus:ring-accent/40;
+    }
+</style>
+
+<script>
+    const devices = {{ devices | tojson }};
+
+    function renderDevices() {
+        const tbody = document.getElementById('devices_tbody');
+        if (devices.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center py-12 text-slate-400">No devices configured.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = devices.map(d => `
+            <tr class="hover:bg-white/[0.02]">
+                <td class="px-4 py-3 align-middle font-mono text-white">${d.ip}</td>
+                <td class="px-4 py-3 align-middle text-slate-300">${d.snmp_version || '2c'}</td>
+                <td class="px-4 py-3 align-middle font-mono text-slate-300">${d.community || d.user || 'N/A'}</td>
+                <td class="px-4 py-3 align-middle text-slate-300">${d.target_type || 'cisco'}</td>
+                <td class="px-4 py-3 align-middle text-center">
+                    <button onclick="showEditModal('${d.ip}')" class="btn btn-secondary text-xs p-2 h-8 w-8"><i class="fas fa-pen"></i></button>
+                    <button onclick="deleteDevice('${d.ip}')" class="btn bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white text-xs p-2 h-8 w-8"><i class="fas fa-trash"></i></button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    function toggleVersionFields() {
+        const version = document.querySelector('input[name="snmp_version"]:checked').value;
+        document.getElementById('v2c_fields').classList.toggle('hidden', version !== '2c');
+        document.getElementById('v3_fields').classList.toggle('hidden', version !== '3');
+    }
+
+    function showModal() {
+        document.getElementById('device_modal').classList.remove('hidden');
+        document.getElementById('device_modal').classList.add('flex');
+    }
+
+    function closeModal() {
+        document.getElementById('device_modal').classList.add('hidden');
+        document.getElementById('device_modal').classList.remove('flex');
+    }
+
+    function showAddModal() {
+        document.getElementById('device_form').reset();
+        document.getElementById('original_ip').value = '';
+        document.getElementById('ip').readOnly = false;
+        document.getElementById('modal_title').textContent = 'Add New Device';
+        toggleVersionFields();
+        showModal();
+    }
+
+    function showEditModal(ip) {
+        const device = devices.find(d => d.ip === ip);
+        if (!device) return;
+
+        document.getElementById('device_form').reset();
+        document.getElementById('original_ip').value = device.ip;
+        document.getElementById('ip').value = device.ip;
+        document.getElementById('ip').readOnly = true;
+        
+        const version = device.snmp_version || '2c';
+        document.querySelector(`input[name="snmp_version"][value="${version}"]`).checked = true;
+
+        if (version === '3') {
+            document.getElementById('user').value = device.user || '';
+            document.getElementById('auth_protocol').value = device.auth_protocol || 'sha';
+            document.getElementById('auth_key').value = device.auth_key || '';
+            document.getElementById('priv_protocol').value = device.priv_protocol || 'aes';
+            document.getElementById('priv_key').value = device.priv_key || '';
+        } else {
+            document.getElementById('community').value = device.community || '';
+        }
+
+        document.getElementById('target_type').value = device.target_type || 'cisco';
+        document.getElementById('modal_title').textContent = `Edit Device: ${device.ip}`;
+        toggleVersionFields();
+        showModal();
+    }
+
+    function saveDevice(event) {
+        event.preventDefault();
+        const form = event.target;
+        const formData = new FormData(form);
+        const device = Object.fromEntries(formData.entries());
+        
+        // Remove v3 fields if v2c is selected, and vice-versa
+        if (device.snmp_version === '2c') {
+            delete device.user;
+            delete device.auth_protocol;
+            delete device.auth_key;
+            delete device.priv_protocol;
+            delete device.priv_key;
+        } else {
+            delete device.community;
+        }
+
+        fetch('/api/devices', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(device)
+        }).then(res => {
+            if (res.ok) {
+                alert('Device saved successfully! Restart the server monitor for changes to take effect.');
+                window.location.reload();
+            } else {
+                alert('Error saving device.');
+            }
+        });
+    }
+
+    function deleteDevice(ip) {
+        if (!confirm(`Are you sure you want to remove the device ${ip}?`)) return;
+
+        fetch(`/api/devices/${ip}`, {
+            method: 'DELETE'
+        }).then(res => {
+            if (res.ok) {
+                alert('Device removed successfully! Restart the server monitor for changes to take effect.');
+                window.location.reload();
+            } else {
+                alert('Error removing device.');
+            }
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', renderDevices);
+</script>
+{% endblock %}

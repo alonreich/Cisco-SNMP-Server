@@ -114,11 +114,19 @@
     <div id="audit_results" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3"></div>
 </div>
 
-
 <script>
     let currentLeaderboard = {{ leaderboard | tojson if leaderboard else '[]' }};
     let allLeaderboardData = {{ leaderboard | tojson if leaderboard else '[]' }};
     let drilldownIP = null;
+
+    function escapeHtml(unsafe) {
+        return unsafe
+             .replace(/&/g, "&amp;")
+             .replace(/</g, "&lt;")
+             .replace(/>/g, "&gt;")
+             .replace(/"/g, "&quot;")
+             .replace(/'/g, "&#039;");
+    }
 
     function shortenIfName(name) {
         if (!name) return '';
@@ -189,11 +197,12 @@
 
     function drillDownToSwitch(ip) {
         const switchData = allLeaderboardData.filter(d => d.switch_ip === ip || d.ip === ip);
-        if (switchData.length === 0) return;
+        if (switchData.length === 0 && drilldownIP !== ip) return; // Prevent re-entry if data not ready
         drilldownIP = ip;
+        history.pushState({ip: ip}, '', '/dashboard/?ip=' + ip);
         currentLeaderboard = switchData.sort((a, b) => (a.descr || '').localeCompare(b.descr || ''));
         renderLeaderboard();
-        const hostname = switchData[0].hostname || ip;
+        const hostname = (switchData.length > 0) ? (switchData[0].hostname || ip) : ip;
         document.getElementById('leaderboard_title').textContent = `${hostname} — Full Inventory`;
         document.getElementById('btn_back_to_leaderboard').classList.remove('hidden');
         document.getElementById('leaderboard_limit').disabled = true;
@@ -202,6 +211,7 @@
 
     function backToLeaderboard() {
         drilldownIP = null;
+        history.pushState({}, '', '/dashboard/');
         currentLeaderboard = [...allLeaderboardData].sort((a, b) => b.util - a.util);
         renderLeaderboard();
         document.getElementById('leaderboard_title').textContent = 'Interface Leaderboard';
@@ -330,6 +340,16 @@
         `).join('');
     }
 
-    document.addEventListener('DOMContentLoaded', () => { loadSavedPreferences(); renderLeaderboard(); });
+    document.addEventListener('DOMContentLoaded', () => { 
+        loadSavedPreferences(); 
+        renderLeaderboard();
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const ipParam = urlParams.get('ip');
+        if (ipParam) {
+            // Use a timeout to ensure data from the first socket event has arrived
+            setTimeout(() => drillDownToSwitch(ipParam), 500);
+        }
+    });
 </script>
 {% endblock %}

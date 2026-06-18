@@ -165,7 +165,7 @@
         </div>
         <div class="hidden md:flex items-center space-x-2">
             <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">
-                <i class="fas fa-th-large"></i> Dashboard
+                <i class="fas fa-chart-line"></i> BANDWIDTH
             </a>
             <a href="/topology" class="nav-link {% if request.path == '/topology' %}active{% endif %}">
                 <i class="fas fa-project-diagram"></i> Topology
@@ -176,12 +176,9 @@
             <a href="/cpu" class="nav-link {% if request.path == '/cpu' %}active{% endif %}">
                 <i class="fas fa-microchip"></i> CPU
             </a>
-            <a href="/memory" class="nav-link {% if request.path == '/memory' %}active{% endif %}">
-                <i class="fas fa-memory"></i> Memory
-            </a>
-            <a href="/config-history" class="nav-link {% if request.path == '/config-history' %}active{% endif %}">
-                <i class="fas fa-history"></i> Configs
-            </a>
+            <a href="/memory" class="nav-link {% if request.path == '/memory' %}active{% endif %}"><i class="fas fa-memory"></i> Memory</a>
+            <a href="/devices" class="nav-link {% if request.path == '/devices' %}active{% endif %}"><i class="fas fa-edit"></i> Add/Remove Device</a>
+            <a href="/config-history" class="nav-link {% if request.path == '/config-history' %}active{% endif %}"><i class="fas fa-history"></i> Configs</a>
         </div>
         <div class="flex items-center gap-4">
             <button id="mobile_menu_btn" class="md:hidden p-2 text-slate-300 hover:text-white" aria-label="Open navigation menu" onclick="toggleMobileNav()">
@@ -199,11 +196,12 @@
             <span class="text-lg font-bold text-white">Menu</span>
             <button onclick="toggleMobileNav()" aria-label="Close navigation menu" class="text-slate-300 hover:text-white text-3xl">&times;</button>
         </div>
-        <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}"><i class="fas fa-th-large"></i> Dashboard</a>
+        <a href="/dashboard/" class="nav-link {% if request.path == '/dashboard/' %}active{% endif %}"><i class="fas fa-chart-line"></i> BANDWIDTH</a>
         <a href="/topology" class="nav-link {% if request.path == '/topology' %}active{% endif %}"><i class="fas fa-project-diagram"></i> Topology</a>
         <a href="/troubleshooting" class="nav-link {% if request.path == '/troubleshooting' %}active{% endif %}"><i class="fas fa-shield-alt"></i> Troubleshooting</a>
         <a href="/cpu" class="nav-link {% if request.path == '/cpu' %}active{% endif %}"><i class="fas fa-microchip"></i> CPU</a>
         <a href="/memory" class="nav-link {% if request.path == '/memory' %}active{% endif %}"><i class="fas fa-memory"></i> Memory</a>
+        <a href="/devices" class="nav-link {% if request.path == '/devices' %}active{% endif %}"><i class="fas fa-edit"></i> Add/Remove Device</a>
         <a href="/config-history" class="nav-link {% if request.path == '/config-history' %}active{% endif %}"><i class="fas fa-history"></i> Configs</a>
     </div>
 
@@ -349,5 +347,8 @@
             }
         });
     </script>
+</body>
+</html>
+>
 </body>
 </html>

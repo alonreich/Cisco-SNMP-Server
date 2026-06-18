@@ -163,6 +163,16 @@ async def snmp_walk(engine, ip, base_oid, credentials):
     except: pass
     return results
 
+def is_physical_port(name):
+    if not name: return False
+    p = name.lower()
+    # Exclude logical/virtual interfaces
+    if any(x in p for x in ['vlan', 'loopback', 'null', 'tunnel', 'virtual', 'management']):
+        return False
+    # Include physical and Port-channels
+    prefixes = ['gi', 'fa', 'te', 'tw', 'fi', 'hu', 'po', 'et', 'ge', 'fe']
+    return any(p.startswith(pre) for pre in prefixes)
+
 async def poll_device(engine, s):
     ip = s['ip']
     target_type = s.get('target_type', 'cisco')
@@ -238,28 +248,39 @@ async def poll_device(engine, s):
             snmp_walk(engine, ip, OID_LLDP_REM_SYSNAME, credentials),
             snmp_walk(engine, ip, OID_LLDP_REM_PORT, credentials),
             snmp_walk(engine, ip, OID_CDP_REM_DEVICE, credentials),
-            snmp_walk(engine, ip, OID_CDP_REM_PORT, credentials)
+            snmp_walk(engine, ip, OID_CDP_REM_PORT, credentials),
+            snmp_walk(engine, ip, '1.0.8802.1.1.2.1.3.7.1.2', credentials), # lldpLocPortIfIndex
+            snmp_walk(engine, ip, '1.2.840.10006.3000.1.1.2.1.1', credentials) # dot3adAggPortSelectedAggID
         ]
-        lldp_names, lldp_ports, cdp_names, cdp_ports = await asyncio.gather(*t_tasks)
+        lldp_names, lldp_ports, cdp_names, cdp_ports, lldp_loc_map, po_map = await asyncio.gather(*t_tasks)
 
         for suffix, descr in if_descrs.items():
             admin = IF_STATUS_MAP.get(re.sub(r'\D', '', if_admins.get(suffix, '2')), 'down')
             oper = IF_STATUS_MAP.get(re.sub(r'\D', '', if_opers.get(suffix, '2')), 'down')
             db.record_interface(ip, suffix, descr, if_aliases.get(suffix, ''), admin, oper, int(if_in.get(suffix, 0)), int(if_out.get(suffix, 0)), 0, 0, if_speeds.get(suffix, '0'))
 
+        for phys_idx, po_idx in po_map.items():
+            if str(po_idx) != '0':
+                db.record_port_channel(ip, phys_idx, po_idx)
+
         for sub_oid, r_name in lldp_names.items():
             r_port = lldp_ports.get(sub_oid)
             if r_name and r_port:
-                local_port_idx = sub_oid.split('.')[-2] if '.' in sub_oid else sub_oid
-                local_port_name = if_descrs.get(local_port_idx, local_port_idx)
-                db.record_neighbor(ip, local_port_name, r_name, r_port, 'lldp')
+                parts = sub_oid.split('.')
+                local_port_num = parts[-2] if len(parts) >= 2 else parts[0]
+                local_if_index = lldp_loc_map.get(local_port_num, local_port_num)
+                local_port_name = if_descrs.get(local_if_index, local_port_num)
+                if is_physical_port(local_port_name) and is_physical_port(r_port):
+                    db.record_neighbor(ip, local_port_name, r_name, r_port, 'lldp')
 
         for sub_oid, r_name in cdp_names.items():
+            r_port = cdp_ports.get(cdp_names.get(sub_oid) and sub_oid) # ensure same index
             r_port = cdp_ports.get(sub_oid)
             if r_name and r_port:
                 local_port_idx = sub_oid.split('.')[-2] if '.' in sub_oid else sub_oid
                 local_port_name = if_descrs.get(local_port_idx, local_port_idx)
-                db.record_neighbor(ip, local_port_name, r_name, r_port, 'cdp')
+                if is_physical_port(local_port_name) and is_physical_port(r_port):
+                    db.record_neighbor(ip, local_port_name, r_name, r_port, 'cdp')
 
     except Exception as e:
         logger.error(f"Error polling {ip}: {e}")

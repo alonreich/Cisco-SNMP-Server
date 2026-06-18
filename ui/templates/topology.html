@@ -51,11 +51,8 @@
             <option value="vcsa">VCSA</option>
             <option value="esxi">ESXI Hosts</option>
         </select>
-        <button onclick="saveLayout()" class="btn btn-primary text-xs uppercase font-bold px-5">
-            <i class="fas fa-save mr-2"></i> Save State
-        </button>
-        <button onclick="refreshMap()" class="btn btn-secondary text-xs uppercase font-bold px-5">
-            <i class="fas fa-expand-arrows-alt mr-2"></i> Re-Layout
+        <button onclick="resetLayout()" class="btn bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 text-xs uppercase font-bold px-5">
+            <i class="fas fa-undo mr-2"></i> Reset
         </button>
     </div>
 </div>
@@ -91,6 +88,7 @@
 
     let allDevices = [];
     let allLinks = [];
+    let allPortChannels = [];
 
     function normalizeHostname(name) {
         if (!name) return '';
@@ -109,8 +107,38 @@
         return name.replace(/FastEthernet/gi, 'Fa')
                    .replace(/GigabitEthernet/gi, 'Gi')
                    .replace(/TenGigabitEthernet/gi, 'Te')
+                   .replace(/TwoGigabitEthernet/gi, 'Two')
+                   .replace(/FiveGigabitEthernet/gi, 'Five')
+                   .replace(/TwentyFiveGigE/gi, 'Twe')
+                   .replace(/FortyGigabitEthernet/gi, 'Fo')
+                   .replace(/HundredGigE/gi, 'Hu')
                    .replace(/Port-channel/gi, 'Po')
                    .replace(/Vlan/gi, 'Vl');
+    }
+
+    function normalizePortName(name) {
+        if (!name) return '';
+        let n = name.toLowerCase().trim();
+        n = n.replace(/fastethernet/g, 'fa')
+             .replace(/gigabitethernet/g, 'gi')
+             .replace(/tengigabitethernet/g, 'te')
+             .replace(/twogigabitethernet/g, 'two')
+             .replace(/fivegigabitethernet/g, 'five')
+             .replace(/twentyfivegige/g, 'twe')
+             .replace(/fortygigabitethernet/g, 'fo')
+             .replace(/hundredgige/g, 'hu')
+             .replace(/port-channel/g, 'po')
+             .replace(/ethernet/g, 'et');
+        // remove leading 0s in port numbers like Gi0/1 vs Gi1
+        return n.replace(/([a-z]+)0\//g, '$1');
+    }
+
+    function isPhysicalPort(name) {
+        if (!name) return false;
+        const n = name.toLowerCase();
+        if (n.includes('vlan') || n.includes('loopback') || n.includes('null') || n.includes('tunnel')) return false;
+        const prefixes = ['gi', 'fa', 'te', 'tw', 'fi', 'hu', 'po', 'et', 'ge', 'fe'];
+        return prefixes.some(p => n.startsWith(p));
     }
 
     function classifyDevice(d) {
@@ -162,45 +190,48 @@
         let filteredLinks = allLinks.filter(l => {
             const fromVisible = filteredIPs.has(l.local_ip);
             const remoteDevice = filteredDevices.find(d => isDeviceMatch(d, l.remote_id));
-            return fromVisible && remoteDevice;
+            const isPhys = isPhysicalPort(l.local_port) && isPhysicalPort(l.remote_port);
+            return fromVisible && remoteDevice && isPhys;
         });
 
         const offlineDevices = filteredDevices.filter(d => d.status !== 'online');
+        const currentPositions = network ? network.getPositions() : {};
 
         const nodeItems = filteredDevices.map(d => {
-            const pos = savedPositions[d.ip] || {};
             const isOffline = d.status !== 'online';
             const statusColor = isOffline ? '#ef4444' : '#2563eb';
             const dtype = classifyDevice(d);
             const showVMware = (dtype === 'esxi' || dtype === 'vm');
 
-            let initialX = pos.x;
-            let initialY = pos.y;
-            if (isOffline) {
-                const offlineIndex = offlineDevices.indexOf(d);
-                initialX = -1000;
-                initialY = 150 + offlineIndex * 70;
-            } else if (initialX === undefined) {
-                if (dtype === 'switch') {
-                    initialX = 0;
-                    initialY = 0;
-                } else if (dtype === 'esxi') {
-                    initialX = 500;
-                    initialY = 0;
+            // PERSISTENCE: Prioritize UI current state > Last saved state > Default
+            let initialX = currentPositions[d.ip]?.x;
+            let initialY = currentPositions[d.ip]?.y;
+            
+            if (initialX === undefined) {
+                initialX = savedPositions[d.ip]?.x;
+                initialY = savedPositions[d.ip]?.y;
+            }
+
+            if (initialX === undefined) {
+                if (isOffline) {
+                    const offlineIndex = offlineDevices.indexOf(d);
+                    initialX = -1000;
+                    initialY = 150 + offlineIndex * 70;
                 } else {
-                    initialX = 900;
-                    initialY = 0;
+                    if (dtype === 'switch') { initialX = 0; initialY = 0; }
+                    else if (dtype === 'esxi') { initialX = 500; initialY = 0; }
+                    else { initialX = 900; initialY = 0; }
                 }
             }
 
             const hue = d.ip.split('.').reduce((acc, oct) => acc + parseInt(oct, 10), 0) * 47 % 360;
-            const nodeBorder = `hsl(${hue}, 80%, 65%)`; // Bright unique color for the exterior border
+            const nodeBorder = `hsl(${hue}, 80%, 65%)`;
 
             return {
                 id: d.ip,
                 x: initialX,
                 y: initialY,
-                fixed: isOffline ? { x: true, y: true } : false,
+                fixed: isOffline && (currentPositions[d.ip]?.x === undefined && savedPositions[d.ip]?.x === undefined) ? { x: true, y: true } : false,
                 label: "",
                 labelOverride: dtype.toUpperCase(),
                 shape: 'image',
@@ -209,232 +240,246 @@
                 statusColor: statusColor,
                 nodeBorder: nodeBorder,
                 textBg: nodeBorder,
-                color: { background: nodeBorder, border: nodeBorder }, // Ensures edges inherit this bright border color
+                color: { background: nodeBorder, border: nodeBorder },
                 borderWidth: 0,
                 shadow: { enabled: true, color: 'rgba(0,0,0,0.6)', size: 8, x: 0, y: 4 }
             };
         });
 
         const edgeItems = [];
-        const processedPairs = new Set();
+        const pairGroups = {};
+        const seenCables = new Set();
+        
+        // PRE-PROCESS: Map Po to its physical members
+        const poToPhys = {};
+        allPortChannels.forEach(pc => {
+            const key = `${pc.device_ip}:${pc.po_ifindex}`;
+            if (!poToPhys[key]) poToPhys[key] = [];
+            poToPhys[key].push(pc.phys_ifindex);
+        });
+
+        // PRE-PROCESS: Map IfIndex to Descr for quick lookup
+        const ifIdxToDescr = {};
+        allDevices.forEach(d => {
+            if (d.interfaces) {
+                d.interfaces.forEach(i => {
+                    ifIdxToDescr[`${d.ip}:${i.index}`] = i.descr;
+                });
+            }
+        });
 
         filteredLinks.forEach(l => {
             const remoteDevice = filteredDevices.find(d => isDeviceMatch(d, l.remote_id));
-
             if (remoteDevice && l.local_ip !== remoteDevice.ip) {
-                const pairId = [l.local_ip, remoteDevice.ip].sort().join('-');
-                if (!processedPairs.has(pairId)) {
-                    const localPortName = shortenIfName(l.local_port);
-                    const remotePortName = shortenIfName(l.remote_port);
-                    edgeItems.push({
-                        id: pairId,
-                        from: l.local_ip,
-                        to: remoteDevice.ip,
-                        title: `${localPortName} \u2194 ${remotePortName}`,
-                        localPort: localPortName,
-                        remotePort: remotePortName,
-                        arrows: { 
-                            to: { enabled: true, scaleFactor: 0.8, type: 'arrow' },
-                            from: { enabled: true, scaleFactor: 0.8, type: 'arrow' }
-                        },
-                        color: { inherit: 'both', opacity: 0.8 },
-                        width: 3, length: 320,
-                        smooth: { type: 'continuous', roundness: 0.2 }
-                    });
+                // Determine if this is a Po link or physical
+                const isLocalPo = l.local_port.toLowerCase().startsWith('po');
+                const isRemotePo = l.remote_port.toLowerCase().startsWith('po');
 
-                    processedPairs.add(pairId);
+                const localEndPoint = `${l.local_ip}:${normalizePortName(l.local_port)}`;
+                const remoteEndPoint = `${remoteDevice.ip}:${normalizePortName(l.remote_port)}`;
+                const cableKey = [localEndPoint, remoteEndPoint].sort().join('|');
+
+                if (!seenCables.has(cableKey)) {
+                    seenCables.add(cableKey);
+                    l.resolvedRemoteIp = remoteDevice.ip;
+
+                    // SMART GROUPING: If Po, find members
+                    let localLabel = shortenIfName(l.local_port);
+                    let remoteLabel = shortenIfName(l.remote_port);
+
+                    if (isLocalPo) {
+                        const localDevice = allDevices.find(d => d.ip === l.local_ip);
+                        const poIface = localDevice?.interfaces?.find(i => normalizePortName(i.descr) === normalizePortName(l.local_port));
+                        if (poIface) {
+                            const members = allPortChannels.filter(pc => pc.device_ip === l.local_ip && pc.po_ifindex === poIface.index);
+                            if (members.length > 0) {
+                                const memberNames = members.map(m => {
+                                    const descr = ifIdxToDescr[`${l.local_ip}:${m.phys_ifindex}`];
+                                    return shortenIfName(descr || m.phys_ifindex);
+                                });
+                                localLabel += ` (${memberNames.join(',')})`;
+                            }
+                        }
+                    }
+
+                    if (isRemotePo) {
+                        const rIface = remoteDevice?.interfaces?.find(i => normalizePortName(i.descr) === normalizePortName(l.remote_port));
+                        if (rIface) {
+                            const members = allPortChannels.filter(pc => pc.device_ip === remoteDevice.ip && pc.po_ifindex === rIface.index);
+                            if (members.length > 0) {
+                                const memberNames = members.map(m => {
+                                    const descr = ifIdxToDescr[`${remoteDevice.ip}:${m.phys_ifindex}`];
+                                    return shortenIfName(descr || m.phys_ifindex);
+                                });
+                                remoteLabel += ` (${memberNames.join(',')})`;
+                            }
+                        }
+                    }
+
+                    l.smartLocalLabel = localLabel;
+                    l.smartRemoteLabel = remoteLabel;
+
+                    const pairKey = [l.local_ip, remoteDevice.ip].sort().join('-');
+                    if (!pairGroups[pairKey]) pairGroups[pairKey] = [];
+                    pairGroups[pairKey].push(l);
                 }
             }
         });
 
-        nodesDS.clear();
-        edgesDS.clear();
-        nodesDS.add(nodeItems);
-        edgesDS.add(edgeItems);
+        Object.keys(pairGroups).forEach(pairKey => {
+            const group = pairGroups[pairKey];
+            const numEdges = group.length;
+            const pairNodes = pairKey.split('-');
+            const pFrom = pairNodes[0], pTo = pairNodes[1];
+
+            group.forEach((l, i) => {
+                const isForward = (l.local_ip === pFrom);
+                const localPortName = l.smartLocalLabel;
+                const remotePortName = l.smartRemoteLabel;
+                
+                let type = 'continuous';
+                let roundness = 0;
+                if (numEdges > 1) {
+                    const offsetIndex = i - (numEdges - 1) / 2;
+                    if (offsetIndex === 0) {
+                        type = 'continuous';
+                        roundness = 0;
+                    } else {
+                        type = offsetIndex > 0 ? 'curvedCW' : 'curvedCCW';
+                        roundness = Math.abs(offsetIndex) * 0.3;
+                    }
+                }
+
+                edgeItems.push({
+                    id: `${l.local_ip}-${l.local_port}-${l.resolvedRemoteIp}-${l.remote_port}`,
+                    from: pFrom,
+                    to: pTo,
+                    title: isForward ? `${localPortName} \u2194 ${remotePortName}` : `${remotePortName} \u2194 ${localPortName}`,
+                    localPort: isForward ? localPortName : remotePortName,
+                    remotePort: isForward ? remotePortName : localPortName,
+                    arrows: { 
+                        to: { enabled: true, scaleFactor: 0.8, type: 'arrow' },
+                        from: { enabled: true, scaleFactor: 0.8, type: 'arrow' }
+                    },
+                    color: { inherit: 'both', opacity: 0.8 },
+                    width: l.local_port.toLowerCase().startsWith('po') ? 5 : 3, // Thicker line for Port-channels
+                    length: 320,
+                    smooth: { enabled: true, type: type, roundness: roundness }
+                });
+            });
+        });
+
+        nodesDS.update(nodeItems);
+        edgesDS.update(edgeItems);
+        
+        const newNodeIds = new Set(nodeItems.map(n => n.id));
+        nodesDS.getIds().forEach(id => { if (!newNodeIds.has(id)) nodesDS.remove(id); });
+        const newEdgeIds = new Set(edgeItems.map(e => e.id));
+        edgesDS.getIds().forEach(id => { if (!newEdgeIds.has(id)) edgesDS.remove(id); });
 
         const hasPositions = Object.keys(savedPositions).length > 0;
 
         const options = {
-            nodes: {
-                chosen: false,
-                shapeProperties: { 
-                    useBorderWithImage: false,
-                    useImageSize: true
-                }
-            },
-            edges: { 
-                chosen: false,
-                hoverWidth: 3, selectionWidth: 4
-            },
-            interaction: { 
-                hover: true, dragNodes: true, dragView: true, zoomView: true,
-                tooltipDelay: 200
-            },
+            nodes: { chosen: false, shapeProperties: { useBorderWithImage: false, useImageSize: true } },
+            edges: { chosen: false, hoverWidth: 3, selectionWidth: 4 },
+            interaction: { hover: true, dragNodes: true, dragView: true, zoomView: true, tooltipDelay: 200 },
             physics: {
-                enabled: !hasPositions,
+                enabled: !hasPositions && !network,
                 solver: 'forceAtlas2Based',
-                forceAtlas2Based: {
-                    gravitationalConstant: -400,
-                    centralGravity: 0.005,
-                    springLength: 300,
-                    springConstant: 0.04,
-                    damping: 0.5
-                },
+                forceAtlas2Based: { gravitationalConstant: -400, centralGravity: 0.005, springLength: 300, springConstant: 0.04, damping: 0.5 },
                 stabilization: { iterations: 1000 }
             }
         };
 
-        if (network) network.destroy();
-        network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, options);
+        if (!network) {
+            network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, options);
 
-        network.on("afterDrawing", (ctx) => {
-            const positions = network.getPositions();
-            nodesDS.forEach((nodeData) => {
-                const pos = positions[nodeData.id];
-                if (!pos) return;
-                const x = pos.x;
-                const y = pos.y;
-                const title = nodeData.labelOverride;
-                if (!title) return;
+            network.on("afterDrawing", (ctx) => {
+                const positions = network.getPositions();
+                nodesDS.forEach((nodeData) => {
+                    const pos = positions[nodeData.id];
+                    if (!pos) return;
+                    const x = pos.x, y = pos.y;
+                    const title = nodeData.labelOverride;
+                    if (!title) return;
+                    ctx.font = "bold 8.5px Inter, system-ui, sans-serif";
+                    ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+                    ctx.strokeStyle = "#1e293b"; ctx.lineWidth = 3;
+                    ctx.strokeText(title, x, y - 28);
+                    ctx.fillStyle = "#cbd5e1"; ctx.fillText(title, x, y - 28);
+                });
 
-                ctx.font = "bold 8.5px Inter, system-ui, sans-serif";
-                ctx.textAlign = "center";
-                ctx.textBaseline = "bottom";
+                edgesDS.forEach((edgeData) => {
+                    try {
+                        const fromId = edgeData.from, toId = edgeData.to;
+                        const posFrom = positions[fromId], posTo = positions[toId];
+                        if (!posFrom || !posTo) return;
+                        const xFrom = posFrom.x, yFrom = posFrom.y;
+                        const xTo = posTo.x, yTo = posTo.y;
+                        const dx = xTo - xFrom, dy = yTo - yFrom;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        if (dist === 0) return;
+                        const ux = dx / dist, uy = dy / dist;
+                        const px = -uy, py = ux;
+                        const a = 65, b = 18;
+                        const r = 1.0 / Math.sqrt((ux * ux) / (a * a) + (uy * uy) / (b * b));
+                        
+                        let offset = dist * 0.30; 
+                        if (offset < r + 10) offset = Math.min(r + 10, dist * 0.45);
+                        
+                        // PARALLEL LINK LABEL OFFSET
+                        let curveSign = 0;
+                        if (edgeData.smooth.type === 'curvedCW') curveSign = 1;
+                        else if (edgeData.smooth.type === 'curvedCCW') curveSign = -1;
+                        const R = edgeData.smooth.roundness || 0;
+                        const curveShiftAmount = 4 * R * (offset / dist) * (1 - offset / dist) * dist * curveSign;
+                        const sx = px * curveShiftAmount, sy = py * curveShiftAmount;
 
-                ctx.strokeStyle = "#1e293b";
-                ctx.lineWidth = 3;
-                ctx.strokeText(title, x, y - 28);
+                        const x1 = xFrom + ux * offset + sx, y1 = yFrom + uy * offset + sy;
+                        const x2 = xTo - ux * offset + sx, y2 = yTo - uy * offset + sy;
+                        
+                        ctx.font = "bold 9px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                        const localPort = edgeData.localPort, remotePort = edgeData.remotePort;
+                        const fromNodeData = nodesDS.get(fromId), toNodeData = nodesDS.get(toId);
+                        const colorFrom = fromNodeData ? fromNodeData.nodeBorder : "#2563eb", colorTo = toNodeData ? toNodeData.nodeBorder : "#2563eb";
+                        const textBgFrom = fromNodeData ? fromNodeData.textBg : "#93c5fd", textBgTo = toNodeData ? toNodeData.textBg : "#c084fc";
+                        
+                        const labelPointerLen = 12;
+                        const cx1 = x1 + px * labelPointerLen, cy1 = y1 + py * labelPointerLen;
+                        const cx2 = x2 - px * labelPointerLen, cy2 = y2 - py * labelPointerLen;
 
-                ctx.fillStyle = "#cbd5e1";
-                ctx.fillText(title, x, y - 28);
+                        if (localPort) {
+                            ctx.strokeStyle = "#475569"; ctx.lineWidth = 1.5;
+                            ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(cx1, cy1); ctx.stroke();
+                            const w = ctx.measureText(localPort).width + 8;
+                            ctx.fillStyle = "rgba(15, 23, 42, 0.95)"; ctx.strokeStyle = colorFrom; ctx.lineWidth = 1.5;
+                            ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(cx1 - w / 2, cy1 - 8, w, 16, 4); else ctx.rect(cx1 - w / 2, cy1 - 8, w, 16);
+                            ctx.fill(); ctx.stroke();
+                            ctx.fillStyle = textBgFrom; ctx.fillText(localPort, cx1, cy1);
+                        }
+                        if (remotePort) {
+                            ctx.strokeStyle = "#475569"; ctx.lineWidth = 1.5;
+                            ctx.beginPath(); ctx.moveTo(x2, y2); ctx.lineTo(cx2, cy2); ctx.stroke();
+                            const w = ctx.measureText(remotePort).width + 8;
+                            ctx.fillStyle = "rgba(15, 23, 42, 0.95)"; ctx.strokeStyle = colorTo; ctx.lineWidth = 1.5;
+                            ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(cx2 - w / 2, cy2 - 8, w, 16, 4); else ctx.rect(cx2 - w / 2, cy2 - 8, w, 16);
+                            ctx.fill(); ctx.stroke();
+                            ctx.fillStyle = textBgTo; ctx.fillText(remotePort, cx2, cy2);
+                        }
+                    } catch (err) { console.error("Error drawing edge labels:", err); }
+                });
             });
 
-            edgesDS.forEach((edgeData) => {
-                try {
-                    const fromId = edgeData.from;
-                    const toId = edgeData.to;
-                    
-                    const posFrom = positions[fromId];
-                    const posTo = positions[toId];
-                    if (!posFrom || !posTo) return;
-
-                    const xFrom = posFrom.x;
-                    const yFrom = posFrom.y;
-                    const xTo = posTo.x;
-                    const yTo = posTo.y;
-                    
-                    const dx = xTo - xFrom;
-                    const dy = yTo - yFrom;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-                    if (dist === 0) return;
-                    
-                    const ux = dx / dist;
-                    const uy = dy / dist;
-                    
-                    const a = 65;
-                    const b = 18;
-                    const r = 1.0 / Math.sqrt((ux * ux) / (a * a) + (uy * uy) / (b * b));
-                    
-                    // Push labels slightly away from the center, but prevent them from clustering onto the device boundaries.
-                    let offset = dist * 0.30;
-                    if (offset < r + 30) {
-                        // Fallback if the nodes are dragged too close to each other
-                        offset = Math.max(r + 20, (dist / 2) - 15);
-                    }
-                    
-                    const x1 = xFrom + ux * offset;
-                    const y1 = yFrom + uy * offset;
-                    const x2 = xTo - ux * offset;
-                    const y2 = yTo - uy * offset;
-                    
-                    ctx.font = "bold 9px monospace";
-                    ctx.textAlign = "center";
-                    ctx.textBaseline = "middle";
-
-                    const localPort = edgeData.localPort;
-                    const remotePort = edgeData.remotePort;
-
-                    const fromNodeData = nodesDS.get(fromId);
-                    const toNodeData = nodesDS.get(toId);
-                    const colorFrom = fromNodeData ? fromNodeData.nodeBorder : "#2563eb";
-                    const colorTo = toNodeData ? toNodeData.nodeBorder : "#2563eb";
-                    const textBgFrom = fromNodeData ? fromNodeData.textBg : "#93c5fd";
-                    const textBgTo = toNodeData ? toNodeData.textBg : "#c084fc";
-
-                    const px = -uy;
-                    const py = ux;
-
-                    const cx1 = x1 + px * 14;
-                    const cy1 = y1 + py * 14;
-                    const cx2 = x2 - px * 14;
-                    const cy2 = y2 - py * 14;
-
-                    if (localPort) {
-                        ctx.strokeStyle = "#475569";
-                        ctx.lineWidth = 1;
-                        ctx.beginPath();
-                        ctx.moveTo(x1, y1);
-                        ctx.lineTo(cx1, cy1);
-                        ctx.stroke();
-
-                        const w = ctx.measureText(localPort).width + 6;
-                        ctx.fillStyle = "rgba(30, 41, 59, 0.85)";
-                        ctx.strokeStyle = colorFrom;
-                        ctx.lineWidth = 1;
-                        ctx.beginPath();
-                        if (ctx.roundRect) {
-                            ctx.roundRect(cx1 - w / 2, cy1 - 7, w, 14, 3);
-                        } else {
-                            ctx.rect(cx1 - w / 2, cy1 - 7, w, 14);
-                        }
-                        ctx.fill();
-                        ctx.stroke();
-
-                        ctx.fillStyle = textBgFrom;
-                        ctx.fillText(localPort, cx1, cy1);
-                    }
-
-                    if (remotePort) {
-                        ctx.strokeStyle = "#475569";
-                        ctx.lineWidth = 1;
-                        ctx.beginPath();
-                        ctx.moveTo(x2, y2);
-                        ctx.lineTo(cx2, cy2);
-                        ctx.stroke();
-
-                        const w = ctx.measureText(remotePort).width + 6;
-                        ctx.fillStyle = "rgba(30, 41, 59, 0.85)";
-                        ctx.strokeStyle = colorTo;
-                        ctx.lineWidth = 1;
-                        ctx.beginPath();
-                        if (ctx.roundRect) {
-                            ctx.roundRect(cx2 - w / 2, cy2 - 7, w, 14, 3);
-                        } else {
-                            ctx.rect(cx2 - w / 2, cy2 - 7, w, 14);
-                        }
-                        ctx.fill();
-                        ctx.stroke();
-
-                        ctx.fillStyle = textBgTo;
-                        ctx.fillText(remotePort, cx2, cy2);
-                    }
-                } catch (err) {
-                    console.error("Error drawing edge labels:", err);
-                }
+            network.on("hoverNode", () => { container.style.setProperty('cursor', 'pointer', 'important'); });
+            network.on("blurNode", () => { container.style.setProperty('cursor', 'grab', 'important'); });
+            network.on("hoverEdge", () => { container.style.setProperty('cursor', 'pointer', 'important'); });
+            network.on("blurEdge", () => { container.style.setProperty('cursor', 'grab', 'important'); });
+            network.on("dragStart", (params) => { if (!params.nodes.length) container.style.setProperty('cursor', 'grabbing', 'important'); });
+            network.on("dragEnd", () => { 
+                container.style.setProperty('cursor', 'grab', 'important'); 
+                saveLayout();
             });
-        });
-
-        network.on("hoverNode", () => { container.style.setProperty('cursor', 'pointer', 'important'); });
-        network.on("blurNode", () => { container.style.setProperty('cursor', 'grab', 'important'); });
-        network.on("hoverEdge", () => { container.style.setProperty('cursor', 'pointer', 'important'); });
-        network.on("blurEdge", () => { container.style.setProperty('cursor', 'grab', 'important'); });
-        network.on("dragStart", (params) => { if (!params.nodes.length) container.style.setProperty('cursor', 'grabbing', 'important'); });
-        network.on("dragEnd", () => { container.style.setProperty('cursor', 'grab', 'important'); });
-        network.on("click", (params) => {
-            if (params.nodes.length > 0) {
-                showDetails(params.nodes[0]);
-            }
-        });
+        }
     }
 
     async function initTopology() {
@@ -443,6 +488,7 @@
         
         allDevices = data.devices;
         allLinks = data.links;
+        allPortChannels = data.port_channels || [];
 
         const filter = document.getElementById('device_filter').value;
         buildNetwork(filter);
@@ -453,19 +499,34 @@
     });
 
     function saveLayout() {
+        if (!network) return;
         const pos = network.getPositions();
         fetch('/api/topology/positions', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(pos)
-        }).then(() => alert('Layout saved.'));
+        });
     }
 
-    function refreshMap() {
-        network.setOptions({ physics: { enabled: true } });
-        setTimeout(() => network.setOptions({ physics: { enabled: false } }), 5000);
+    function resetLayout() {
+        if (confirm("Reset topology map to default layout? This will clear all manual positions.")) {
+            fetch('/api/topology/positions', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({})
+            }).then(() => window.location.reload());
+        }
     }
 
     document.addEventListener('DOMContentLoaded', initTopology);
+
+    socket.on('device_update', (data) => {
+        if (data.devices) allDevices = data.devices;
+        if (data.links) allLinks = data.links;
+        if (data.port_channels) allPortChannels = data.port_channels;
+        
+        const filter = document.getElementById('device_filter').value;
+        buildNetwork(filter);
+    });
 </script>
 {% endblock %}

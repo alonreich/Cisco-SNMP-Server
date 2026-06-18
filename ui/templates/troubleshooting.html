@@ -14,17 +14,24 @@
             </div>
         </div>
         <div class="flex gap-2">
+            <select id="device_type_filter" aria-label="Filter issues by SNMP device type"
+                    class="bg-surface-900 border border-surface-700 rounded-xl px-4 py-2 text-sm text-white focus:ring-2 focus:ring-accent/40 focus:border-accent transition-all">
+                <option value="cisco">Cisco Switches</option>
+                <option value="all">All Devices</option>
+                <option value="esxi">ESXi Only</option>
+                <option value="vcsa">VCSA Only</option>
+            </select>
             <div onclick="filterSeverity('all')" class="px-3 py-1 bg-surface-900 rounded-lg border border-surface-700 text-center cursor-pointer hover:border-slate-500 transition-colors">
                 <span class="block text-[9px] font-bold text-slate-400 uppercase">Total Issues</span>
-                <span class="text-sm font-black text-white">{{ total_count }}</span>
+                <span id="total_count_el" class="text-sm font-black text-white">{{ total_count }}</span>
             </div>
             <div onclick="filterSeverity('critical')" class="px-3 py-1 bg-red-500/10 rounded-lg border border-red-500/20 text-center cursor-pointer hover:border-red-500/50 transition-colors">
                 <span class="block text-[9px] font-bold text-red-400 uppercase">Critical</span>
-                <span class="text-sm font-black text-red-400">{{ critical_count }}</span>
+                <span id="critical_count_el" class="text-sm font-black text-red-400">{{ critical_count }}</span>
             </div>
             <div onclick="filterSeverity('high-medium')" class="px-3 py-1 bg-yellow-500/10 rounded-lg border border-yellow-500/20 text-center cursor-pointer hover:border-yellow-500/50 transition-colors">
                 <span class="block text-[9px] font-bold text-yellow-400 uppercase">High/Medium</span>
-                <span class="text-sm font-black text-yellow-400">{{ high_medium_count }}</span>
+                <span id="high_med_count_el" class="text-sm font-black text-yellow-400">{{ high_medium_count }}</span>
             </div>
         </div>
     </div>
@@ -46,7 +53,7 @@
                     <th class="px-4 py-2 text-left align-middle w-2/5 border border-black">Remediation Script</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="issues_tbody">
                 {% for issue in detected_issues %}
                 <tr data-severity="{{ issue.data_severity }}" class="hover:bg-white/[0.01] transition-colors">
                     <td class="px-4 py-3 text-center align-middle border border-black">
@@ -76,12 +83,22 @@
                     <td class="px-4 py-3 text-left align-middle border border-black">
                         <div class="relative group w-full">
                             <div class="absolute top-1.5 right-1.5 z-20">
-                                <button onclick="copyToClipboard('{{ issue.remediation_id }}', this)" aria-label="Copy command" class="p-1 rounded bg-green-500/10 border border-green-500/20 text-green-400 hover:bg-green-500 hover:text-white transition-all cursor-pointer text-xs flex items-center justify-center w-6 h-6 shadow-md">
+                                <button onclick="copyToClipboard(this, '{{ issue.remediation_id }}')" aria-label="Copy command" class="copy-btn p-1 rounded bg-green-500/10 border border-green-500/20 text-green-400 hover:bg-green-500 hover:text-white transition-all cursor-pointer text-xs flex items-center justify-center w-6 h-6 shadow-md">
                                     <i class="fas fa-copy text-[10px]"></i>
                                 </button>
                             </div>
                             <div class="text-[9px] font-bold text-slate-400 uppercase mb-0.5">{{ issue.remediation_title }}</div>
                             <pre class="bg-surface-900 p-2.5 pr-10 rounded-lg border border-surface-700 font-mono text-[10px] text-green-400 overflow-x-auto leading-normal max-h-40 w-full" id="{{ issue.remediation_id }}">{{ issue.remediation_script }}</pre>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="px-6 py-20 text-center text-slate-400">
+                        <div class="flex flex-col items-center justify-center gap-3">
+                            <i class="fas fa-check-circle text-5xl text-green-500/50"></i>
+                            <span class="text-base font-medium">No issues detected.</span>
+                            <span class="text-xs text-slate-500">The system is operating within normal parameters.</span>
                         </div>
                     </td>
                 </tr>
@@ -92,111 +109,196 @@
 </div>
 
 <script>
-function filterSeverity(severity) {
-    const rows = document.querySelectorAll('tbody tr');
-    const cards = {
-        all: document.querySelector('[onclick="filterSeverity(\'all\')"]'),
-        critical: document.querySelector('[onclick="filterSeverity(\'critical\')"]'),
-        'high-medium': document.querySelector('[onclick="filterSeverity(\'high-medium\')"]')
-    };
-    
-    Object.values(cards).forEach(c => {
-        if (c) c.classList.remove('ring-2', 'ring-blue-500');
-    });
+    let allIssues = {{ detected_issues | tojson }};
 
-    const banner = document.getElementById('filter_status');
-    const bannerName = document.getElementById('filter_name');
+    function escapeHtml(unsafe) {
+        if (typeof unsafe !== 'string') return '';
+        return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    }
 
-    if (severity === 'all') {
-        rows.forEach(r => r.classList.remove('hidden'));
-        if (banner) banner.classList.add('hidden');
-    } else {
+    function getDeviceCategory(issue) {
+        if (issue.is_global) return null;
+        if (issue.target_type === 'cisco') return 'cisco';
+        if (issue.target_type === 'vmware') {
+            const hn = (issue.hostname || '').toLowerCase();
+            return (hn.includes('vcenter') || hn.includes('appliance')) ? 'vcsa' : 'esxi';
+        }
+        return 'cisco';
+    }
+
+    function renderIssues(issues) {
+        const filter = document.getElementById('device_type_filter').value;
+        
+        const filteredIssues = issues.filter(issue => {
+            if (filter === 'all') return true;
+            const category = getDeviceCategory(issue);
+            if (issue.is_global) {
+                if (filter === 'cisco' && issue.target_type === 'cisco') return true;
+                if ((filter === 'esxi' || filter === 'vcsa') && issue.target_type === 'vmware') return true;
+                return false;
+            }
+            return category === filter;
+        });
+
+        const tbody = document.getElementById('issues_tbody');
+        document.getElementById('total_count_el').textContent = filteredIssues.length;
+        document.getElementById('critical_count_el').textContent = filteredIssues.filter(iss => iss.data_severity === 'critical').length;
+        document.getElementById('high_med_count_el').textContent = filteredIssues.filter(iss => iss.data_severity === 'high-medium').length;
+        
+        if (filteredIssues.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="4" class="px-6 py-20 text-center text-slate-400">
+                        <div class="flex flex-col items-center justify-center gap-3">
+                            <i class="fas fa-check-circle text-5xl text-green-500/50"></i>
+                            <span class="text-base font-medium">No issues detected for this filter.</span>
+                            <span class="text-xs text-slate-500">The system is operating within normal parameters.</span>
+                        </div>
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+
+        tbody.innerHTML = filteredIssues.map(issue => {
+            const targetInfoHtml = (issue.target_device_info || '').split('\n').map((line, i, arr) => {
+                let lineClass = 'text-slate-300';
+                if (i === 0) {
+                    if (line.includes('Offline') || line.includes('Unreachable')) lineClass = 'font-bold text-red-300';
+                    else if (line.includes('VMware')) lineClass = 'font-bold text-purple-300';
+                    else lineClass = 'font-bold text-blue-300';
+                } else if (i === arr.length - 1 && line.includes('Connect')) {
+                    lineClass = 'text-[9px] text-slate-500 mt-1 font-sans italic';
+                }
+                return `<span class="block ${lineClass}">${escapeHtml(line)}</span>`;
+            }).join('');
+
+            return `
+                <tr data-severity="${issue.data_severity}" class="hover:bg-white/[0.01] transition-colors">
+                    <td class="px-4 py-3 text-center align-middle border border-black"><span class="px-1.5 py-0.5 ${issue.severity_class} text-[9px] font-black uppercase rounded">${escapeHtml(issue.severity_label)}</span></td>
+                    <td class="px-4 py-3 text-center align-middle border border-black cursor-help issue-cell"
+                        data-title="${escapeHtml(issue.title)}" data-why="${escapeHtml(issue.why_problem)}" data-simple="${escapeHtml(issue.simple_terms)}"
+                        data-solution="${escapeHtml(issue.solution)}" data-target="${escapeHtml((issue.target_device_info || '').split('\n')[0])}" data-connection="${escapeHtml(issue.connection_type)}">
+                        <div class="flex items-center justify-center gap-1.5">
+                            <h4 class="text-xs font-bold text-white">${escapeHtml(issue.title)}</h4>
+                            <span class="inline-flex items-center justify-center text-blue-400"><i class="fas fa-info-circle text-[10px]"></i></span>
+                        </div>
+                    </td>
+                    <td class="px-4 py-3 text-center align-middle border border-black"><div class="bg-surface-900/60 p-2 rounded-lg border border-surface-700 font-mono text-[11px] text-slate-300 space-y-0.5 mx-auto text-center">${targetInfoHtml}</div></td>
+                    <td class="px-4 py-3 text-left align-middle border border-black">
+                        <div class="relative group w-full">
+                            <div class="absolute top-1.5 right-1.5 z-20"><button aria-label="Copy command" class="copy-btn p-1 rounded bg-green-500/10 border border-green-500/20 text-green-400 hover:bg-green-500 hover:text-white transition-all cursor-pointer text-xs flex items-center justify-center w-6 h-6 shadow-md" data-element-id="${issue.remediation_id}"><i class="fas fa-copy text-[10px]"></i></button></div>
+                            <div class="text-[9px] font-bold text-slate-400 uppercase mb-0.5">${escapeHtml(issue.remediation_title)}</div>
+                            <pre class="bg-surface-900 p-2.5 pr-10 rounded-lg border border-surface-700 font-mono text-[10px] text-green-400 overflow-x-auto leading-normal max-h-40 w-full" id="${issue.remediation_id}">${escapeHtml(issue.remediation_script)}</pre>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+        
+        initializeTooltips();
+        initializeCopyButtons();
+    }
+
+    function filterSeverity(severity) {
+        const rows = document.querySelectorAll('#issues_tbody tr');
         rows.forEach(r => {
-            if (r.getAttribute('data-severity') === severity) {
+            if (severity === 'all' || r.getAttribute('data-severity') === severity) {
                 r.classList.remove('hidden');
             } else {
                 r.classList.add('hidden');
             }
         });
-        if (banner) {
+        document.querySelectorAll('[onclick^="filterSeverity"]').forEach(c => c.classList.remove('ring-2', 'ring-blue-500'));
+        document.querySelector(`[onclick="filterSeverity('${severity}')"]`).classList.add('ring-2', 'ring-blue-500');
+        const banner = document.getElementById('filter_status');
+        if (severity === 'all') {
+            banner.classList.add('hidden');
+        } else {
             banner.classList.remove('hidden');
-            bannerName.textContent = severity === 'critical' ? 'Critical' : 'High/Medium';
-        }
-        if (cards[severity]) {
-            cards[severity].classList.add('ring-2', 'ring-blue-500');
+            document.getElementById('filter_name').textContent = severity;
         }
     }
-}
 
-function copyToClipboard(elementId, btn) {
-    const text = document.getElementById(elementId).textContent;
-    navigator.clipboard.writeText(text).then(() => {
-        const originalHTML = btn.innerHTML;
-        btn.innerHTML = '<i class="fas fa-check text-green-400 text-[9px]"></i>';
-        btn.className = 'p-1 rounded bg-green-500/20 border border-green-500/40 text-green-300 transition-all cursor-pointer text-xs flex items-center justify-center w-6 h-6 shadow-md';
-        setTimeout(() => {
-            btn.innerHTML = originalHTML;
-            btn.className = 'p-1 rounded bg-green-500/10 border border-green-500/20 text-green-400 hover:bg-green-500 hover:text-white transition-all cursor-pointer text-xs flex items-center justify-center w-6 h-6 shadow-md';
-        }, 2000);
-    });
-}
+    function copyToClipboard(btn, elementId) {
+        const text = document.getElementById(elementId)?.textContent;
+        if (!text) return;
 
-const tooltip = document.getElementById('global_tooltip');
-document.querySelectorAll('.issue-cell').forEach(cell => {
-    cell.addEventListener('mouseenter', () => {
-        const title = cell.getAttribute('data-title');
-        const why = cell.getAttribute('data-why');
-        const simple = cell.getAttribute('data-simple');
-        const solution = cell.getAttribute('data-solution');
-        const target = cell.getAttribute('data-target');
-        const conn = cell.getAttribute('data-connection');
-        
-        tooltip.innerHTML = `
-            <div class="border-b border-surface-700 pb-3 mb-3">
-                <div class="font-bold text-red-400 text-xs uppercase tracking-wider mb-1">Why it is a problem:</div>
-                <p class="text-slate-300 text-sm mb-2 leading-relaxed">${why}</p>
-                <p class="text-white font-semibold italic text-xs bg-red-500/10 p-2 rounded border border-red-500/20">In simple terms: ${simple}</p>
-            </div>
-            <div>
-                <div class="font-bold text-green-400 text-xs uppercase tracking-wider mb-1">What should be done (The Solution):</div>
-                <p class="text-slate-300 text-sm mb-2 leading-relaxed">${solution}</p>
-                <div class="text-[11px] text-slate-400 font-mono mt-3 bg-surface-800 p-2 rounded border border-surface-700 space-y-1">
-                    <div><span class="text-slate-500 font-bold">Target Device:</span> ${target}</div>
-                    <div><span class="text-slate-500 font-bold">Connection Type:</span> ${conn}</div>
-                </div>
-            </div>
-        `;
-        
-        tooltip.classList.remove('hidden');
-        positionTooltip(cell);
-    });
-    
-    cell.addEventListener('mouseleave', () => {
-        tooltip.classList.add('hidden');
-    });
-    
-    cell.addEventListener('mousemove', () => {
-        positionTooltip(cell);
-    });
-});
-
-function positionTooltip(cell) {
-    const rect = cell.getBoundingClientRect();
-    const tooltipRect = tooltip.getBoundingClientRect();
-    
-    let left = rect.left + (rect.width / 2) - (tooltipRect.width / 2);
-    let top = rect.top - tooltipRect.height - 12;
-    
-    if (left < 10) left = 10;
-    if (left + tooltipRect.width > window.innerWidth - 10) {
-        left = window.innerWidth - tooltipRect.width - 10;
+        navigator.clipboard.writeText(text).then(() => {
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-check text-white"></i>';
+            btn.classList.remove('bg-green-500/10', 'border-green-500/20', 'text-green-400');
+            btn.classList.add('bg-green-500', 'border-green-600', 'text-white', 'cursor-default');
+            btn.disabled = true;
+            
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+                btn.classList.add('bg-green-500/10', 'border-green-500/20', 'text-green-400');
+                btn.classList.remove('bg-green-500', 'border-green-600', 'text-white', 'cursor-default');
+                btn.disabled = false;
+            }, 2000);
+        }).catch(err => console.error('Failed to copy text: ', err));
     }
-    if (top < 10) {
-        top = rect.bottom + 12;
+
+    const tooltip = document.getElementById('global_tooltip');
+
+    function initializeTooltips() {
+        document.querySelectorAll('.issue-cell').forEach(cell => {
+            if (cell.dataset.tooltipInitialized) return;
+            cell.dataset.tooltipInitialized = true;
+            cell.addEventListener('mouseenter', () => {
+                const title = cell.getAttribute('data-title');
+                const why = cell.getAttribute('data-why');
+                const simple = cell.getAttribute('data-simple');
+                const solution = cell.getAttribute('data-solution');
+                const target = cell.getAttribute('data-target');
+                const conn = cell.getAttribute('data-connection');
+                tooltip.innerHTML = `
+                    <div class="border-b border-surface-700 pb-3 mb-3"><div class="font-bold text-red-400 text-xs uppercase tracking-wider mb-1">Why it is a problem:</div><p class="text-slate-300 text-sm mb-2 leading-relaxed">${why}</p><p class="text-white font-semibold italic text-xs bg-red-500/10 p-2 rounded border border-red-500/20">In simple terms: ${simple}</p></div>
+                    <div><div class="font-bold text-green-400 text-xs uppercase tracking-wider mb-1">What should be done (The Solution):</div><p class="text-slate-300 text-sm mb-2 leading-relaxed">${solution}</p><div class="text-[11px] text-slate-400 font-mono mt-3 bg-surface-800 p-2 rounded border border-surface-700 space-y-1"><div><span class="text-slate-500 font-bold">Target Device:</span> ${target}</div><div><span class="text-slate-500 font-bold">Connection Type:</span> ${conn}</div></div></div>
+                `;
+                tooltip.classList.remove('hidden');
+                positionTooltip(cell);
+            });
+            cell.addEventListener('mouseleave', () => tooltip.classList.add('hidden'));
+            cell.addEventListener('mousemove', () => positionTooltip(cell));
+        });
     }
-    
-    tooltip.style.left = left + 'px';
-    tooltip.style.top = top + 'px';
-}
+
+    function initializeCopyButtons() {
+        document.querySelectorAll('.copy-btn').forEach(button => {
+            if (button.dataset.copyInitialized) return;
+            button.dataset.copyInitialized = true;
+            button.addEventListener('click', (e) => {
+                e.stopPropagation();
+                copyToClipboard(button, button.dataset.elementId);
+            });
+        });
+    }
+
+    function positionTooltip(cell) {
+        const rect = cell.getBoundingClientRect();
+        const tooltipRect = tooltip.getBoundingClientRect();
+        let left = rect.left + (rect.width / 2) - (tooltipRect.width / 2);
+        let top = rect.top - tooltipRect.height - 12;
+        if (left < 10) left = 10;
+        if (left + tooltipRect.width > window.innerWidth - 10) { left = window.innerWidth - tooltipRect.width - 10; }
+        if (top < 10) { top = rect.bottom + 12; }
+        tooltip.style.left = left + 'px';
+        tooltip.style.top = top + 'px';
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        renderIssues(allIssues);
+        document.getElementById('device_type_filter').addEventListener('change', () => renderIssues(allIssues));
+    });
+
+    socket.on('device_update', (data) => {
+        if (data.issues) {
+            allIssues = data.issues;
+            renderIssues(allIssues);
+        }
+    });
 </script>
 {% endblock %}
+

@@ -38,6 +38,20 @@
             </div>
         </div>
         <div class="flex items-center gap-4">
+            <select id="device_type_filter" aria-label="Filter devices by type"
+                    class="bg-surface-900 border border-surface-700 rounded-xl px-4 py-2 text-sm text-white focus:ring-2 focus:ring-accent/40 focus:border-accent transition-all">
+                <option value="cisco">Cisco Switches</option>
+                <option value="all">All Devices</option>
+                <option value="esxi">ESXi Only</option>
+                <option value="vcsa">VCSA Only</option>
+            </select>
+            <select id="time_range_filter" aria-label="Select time range for graphs"
+                    class="bg-surface-900 border border-surface-700 rounded-xl px-4 py-2 text-sm text-white focus:ring-2 focus:ring-accent/40 focus:border-accent transition-all">
+                <option value="1">Last 1 Hour</option>
+                <option value="6">Last 6 Hours</option>
+                <option value="24" selected>Last 24 Hours</option>
+                <option value="168">Last 7 Days</option>
+            </select>
             <button onclick="exportCSV()" class="btn btn-secondary text-xs uppercase font-bold py-2 px-5">
                 <i class="fas fa-download mr-2 opacity-60"></i> Export Dataset
             </button>
@@ -57,7 +71,7 @@
         </div>
         <div id="device_list" class="space-y-1.5 max-h-[600px] overflow-y-auto pr-1 custom-scrollbar">
             {% for ip, device in devices.items() %}
-            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="{{ ip }}" data-hostname="{{ device.hostname or ip }}" onclick="toggleDevice('{{ ip }}')">
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="{{ ip }}" data-hostname="{{ device.hostname or ip }}" data-target-type="{{ device.target_type or 'cisco' }}" onclick="toggleDevice('{{ ip }}')">
                 <div class="flex items-center gap-3">
                     <input type="checkbox" id="chk_{{ ip }}" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
                     <div class="text-left">
@@ -74,13 +88,6 @@
     <div class="col-span-12 lg:col-span-9 space-y-6">
         <div class="bg-surface-800 p-6 rounded-2xl border border-surface-700 shadow-xl">
             <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
-                <div class="flex items-center gap-3" role="group" aria-label="Time range selection">
-                    <span class="text-xs font-bold text-slate-400 uppercase tracking-widest">Time Window:</span>
-                    <button onclick="setRange(1)" class="btn btn-secondary text-xs range-btn ring-2 ring-accent">1 Hour</button>
-                    <button onclick="setRange(6)" class="btn btn-secondary text-xs range-btn">6 Hours</button>
-                    <button onclick="setRange(24)" class="btn btn-secondary text-xs range-btn">24 Hours</button>
-                    <button onclick="setRange(168)" class="btn btn-secondary text-xs range-btn">7 Days</button>
-                </div>
                 <div id="focused_device_title" class="text-xs font-bold text-accent uppercase tracking-widest"></div>
             </div>
 
@@ -133,9 +140,9 @@
 </div>
 
 <script>
-let currentRange = 1;
 let chart = null;
 let selectedDevices = [];
+const allDevices = {{ devices | tojson }};
 const deviceData = {};
 
 const colorPalette = [
@@ -143,17 +150,77 @@ const colorPalette = [
     '#10b981', '#ec4899', '#6366f1', '#84cc16', '#06b6d4'
 ];
 
-function filterDevices() {
+function escapeHtml(text) {
+    if (!text) return '';
+    return text.toString()
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function filterDevices(shouldSelectDefaults) {
     const search = document.getElementById('device_search').value.toLowerCase();
+    const deviceFilter = document.getElementById('device_type_filter').value;
+
+    const newlyVisibleIPs = new Set();
+
     document.querySelectorAll('.device-row').forEach(row => {
-        const text = row.getAttribute('data-hostname').toLowerCase() + ' ' + row.getAttribute('data-ip');
-        row.style.setProperty('display', text.includes(search) ? 'flex' : 'none', 'important');
+        const ip = row.getAttribute('data-ip');
+        const hostname = row.getAttribute('data-hostname').toLowerCase();
+        const targetType = row.getAttribute('data-target-type');
+        
+        const searchText = hostname + ' ' + ip;
+        const searchMatch = searchText.includes(search);
+
+        let typeMatch = false;
+        if (deviceFilter === 'all') {
+            typeMatch = true;
+        } else if (deviceFilter === 'cisco') {
+            typeMatch = targetType === 'cisco';
+        } else if (targetType === 'vmware') {
+            if (deviceFilter === 'esxi') typeMatch = !hostname.includes('vcenter') && !hostname.includes('appliance');
+            if (deviceFilter === 'vcsa') typeMatch = hostname.includes('vcenter') || hostname.includes('appliance');
+        }
+
+        if (searchMatch && typeMatch) {
+            row.style.setProperty('display', 'flex', 'important');
+            newlyVisibleIPs.add(ip);
+        } else {
+            row.style.setProperty('display', 'none', 'important');
+        }
     });
+
+    const devicesToDeselect = selectedDevices.filter(ip => !newlyVisibleIPs.has(ip));
+    devicesToDeselect.forEach(ip => {
+        const idx = selectedDevices.indexOf(ip);
+        if (idx > -1) selectedDevices.splice(idx, 1);
+        
+        const row = document.querySelector(`.device-row[data-ip="${ip}"]`);
+        const chk = document.getElementById(`chk_${ip}`);
+        if (row) row.classList.remove('active');
+        if (chk) chk.checked = false;
+    });
+
+    if (shouldSelectDefaults) {
+        selectedDevices = [];
+        newlyVisibleIPs.forEach(ip => {
+            selectedDevices.push(ip);
+            const row = document.querySelector(`.device-row[data-ip="${ip}"]`);
+            const chk = document.getElementById(`chk_${ip}`);
+            if (row) row.classList.add('active');
+            if (chk) chk.checked = true;
+        });
+    }
+
+    updateBadge();
+    loadChartData();
 }
 
 function updateBadge() {
-    const total = document.querySelectorAll('.device-row').length;
-    document.getElementById('device_count_badge').textContent = `${selectedDevices.length}/${total}`;
+    const visibleRows = Array.from(document.querySelectorAll('.device-row')).filter(r => r.style.display !== 'none');
+    document.getElementById('device_count_badge').textContent = `${selectedDevices.length}/${visibleRows.length}`;
 }
 
 function toggleDevice(ip) {
@@ -175,15 +242,8 @@ function toggleDevice(ip) {
     loadChartData();
 }
 
-function setRange(hours) {
-    currentRange = hours;
-    document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('ring-2', 'ring-accent'));
-    const active = document.querySelector(`.range-btn[onclick="setRange(${hours})"]`);
-    if (active) active.classList.add('ring-2', 'ring-accent');
-    loadChartData();
-}
-
 function loadChartData() {
+    const range = document.getElementById('time_range_filter').value;
     if (selectedDevices.length === 0) {
         if (chart) {
             chart.destroy();
@@ -194,7 +254,7 @@ function loadChartData() {
     }
 
     const promises = selectedDevices.map(ip => 
-        fetch(`/api/device/${encodeURIComponent(ip)}/history?metric=memory&hours=${currentRange}`)
+        fetch(`/api/device/${encodeURIComponent(ip)}/history?metric=memory&hours=${range}`)
             .then(r => r.json())
             .then(res => {
                 deviceData[ip] = res.data || [];
@@ -263,16 +323,6 @@ function updateStats() {
     const poolEl = document.getElementById('stat_pool');
     poolEl.textContent = pool;
     poolEl.title = pool;
-}
-
-function escapeHtml(text) {
-    if (!text) return '';
-    return text.toString()
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
 }
 
 function loadAlerts() {
@@ -348,28 +398,50 @@ function exportCSV() {
         alert('Select at least one device');
         return;
     }
-    let csv = 'Timestamp,Device,Memory Allocation %,Used Bytes,Free Bytes,Memory Pool\n';
+    let csv = 'Timestamp,Device,Memory Allocation %,Used Bytes,Free Bytes,Memory Pool\\n';
     selectedDevices.forEach(ip => {
         const hostname = document.querySelector(`.device-row[data-ip="${ip}"]`).getAttribute('data-hostname');
         const data = deviceData[ip] || [];
         data.forEach(d => {
-            csv += `${d[0]},${hostname},${d[1]},${d[3]},${d[4]},${d[2] || 'Processor'}\n`;
+            csv += `${d[0]},${hostname},${d[1]},${d[3]},${d[4]},${d[2] || 'Processor'}
+`;
         });
     });
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `memory_analytics_${currentRange}h.csv`;
+    a.download = `memory_analytics_${document.getElementById('time_range_filter').value}h.csv`;
     a.click();
     URL.revokeObjectURL(url);
 }
 
+function loadPreferences() {
+    const savedType = localStorage.getItem('mem_device_filter');
+    if (savedType) document.getElementById('device_type_filter').value = savedType;
+
+    const savedRange = localStorage.getItem('mem_time_range');
+    if (savedRange) document.getElementById('time_range_filter').value = savedRange;
+}
+
+function savePreferences() {
+    localStorage.setItem('mem_device_filter', document.getElementById('device_type_filter').value);
+    localStorage.setItem('mem_time_range', document.getElementById('time_range_filter').value);
+}
+
+document.getElementById('device_type_filter').addEventListener('change', () => {
+    savePreferences();
+    filterDevices(true);
+});
+
+document.getElementById('time_range_filter').addEventListener('change', () => {
+    savePreferences();
+    loadChartData();
+});
+
 document.addEventListener('DOMContentLoaded', () => {
-    const firstRow = document.querySelector('.device-row');
-    if (firstRow) {
-        toggleDevice(firstRow.getAttribute('data-ip'));
-    }
+    loadPreferences();
+    filterDevices(true);
 });
 </script>
 {% endblock %}
