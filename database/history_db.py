@@ -107,6 +107,13 @@ class HistoryDB:
                 PRIMARY KEY (device_ip, phys_ifindex)
             )''')
 
+            c.execute('''CREATE TABLE IF NOT EXISTS suppressed_issues (
+                remediation_id TEXT PRIMARY KEY,
+                issue_type TEXT,
+                target_ip TEXT,
+                timestamp TEXT NOT NULL
+            )''')
+
             # Create indexes for faster history queries
             c.execute('CREATE INDEX IF NOT EXISTS idx_cpu_device_time ON cpu_history(device_ip, timestamp)')
             c.execute('CREATE INDEX IF NOT EXISTS idx_if_device_time ON interface_history(device_ip, timestamp)')
@@ -130,8 +137,10 @@ class HistoryDB:
                 """INSERT INTO devices (ip, hostname, sys_descr, sys_uptime, sys_name, status, last_seen)
                    VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(ip) DO UPDATE SET
-                   hostname=excluded.hostname, sys_descr=excluded.sys_descr, 
-                   sys_uptime=excluded.sys_uptime, sys_name=excluded.sys_name,
+                   hostname=COALESCE(excluded.hostname, devices.hostname), 
+                   sys_descr=COALESCE(excluded.sys_descr, devices.sys_descr), 
+                   sys_uptime=COALESCE(excluded.sys_uptime, devices.sys_uptime), 
+                   sys_name=COALESCE(excluded.sys_name, devices.sys_name),
                    status=excluded.status, last_seen=excluded.last_seen""",
                 (device['ip'], device.get('hostname'), device.get('sys_descr'), 
                  device.get('sys_uptime'), device.get('sys_name'), device.get('status'),
@@ -215,6 +224,29 @@ class HistoryDB:
         except Exception as e:
             logging.error(f"Error fetching devices: {e}")
             return []
+        finally:
+            conn.close()
+
+    def purge_device(self, device_ip):
+        """Completely remove a device and all its historical data from every table."""
+        conn = self.get_connection()
+        try:
+            # devices table uses 'ip' as its primary key column
+            conn.execute("DELETE FROM devices WHERE ip = ?", (device_ip,))
+            # All other tables use 'device_ip'
+            tables_with_device = [
+                'cpu_history', 'memory_history',
+                'interface_history', 'config_history', 'alerts',
+                'port_channels'
+            ]
+            for table in tables_with_device:
+                conn.execute(f"DELETE FROM {table} WHERE device_ip = ?", (device_ip,))
+            # topology table uses 'local_ip' and 'remote_id'
+            conn.execute("DELETE FROM topology WHERE local_ip = ? OR remote_id = ?", (device_ip, device_ip))
+            conn.commit()
+            logging.info(f"Purged device {device_ip} from all tables")
+        except Exception as e:
+            logging.error(f"Error purging device {device_ip}: {e}")
         finally:
             conn.close()
 
@@ -395,18 +427,51 @@ class HistoryDB:
         finally:
             conn.close()
 
-    def enforce_size_limit(self, max_mb=20):
+    def enforce_size_limit(self, max_mb=500):
         if not os.path.exists(self.db_path): return
         current_size_mb = os.path.getsize(self.db_path) / (1024 * 1024)
         if current_size_mb <= max_mb: return
         conn = self.get_connection()
         try:
-            tables = ['cpu_history', 'memory_history', 'interface_history', 'alerts']
-            for table in tables:
-                conn.execute(f"DELETE FROM {table} WHERE id IN (SELECT id FROM {table} ORDER BY timestamp ASC LIMIT 5000)")
+            # Delete 10% of the oldest records from the largest table (interface_history) first
+            conn.execute("DELETE FROM interface_history WHERE id IN (SELECT id FROM interface_history ORDER BY timestamp ASC LIMIT (SELECT count(*)/10 FROM interface_history))")
             conn.commit()
             conn.execute("VACUUM")
         except Exception as e:
             logging.error(f"Error enforcing DB size limit: {e}")
+        finally:
+            conn.close()
+
+    def get_suppressions(self):
+        conn = self.get_connection()
+        try:
+            rows = conn.execute("SELECT * FROM suppressed_issues").fetchall()
+            return [self._to_dict(row) for row in rows]
+        except Exception as e:
+            logging.error(f"Error fetching suppressions: {e}")
+            return []
+        finally:
+            conn.close()
+
+    def add_suppression(self, remediation_id, issue_type, target_ip):
+        conn = self.get_connection()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO suppressed_issues (remediation_id, issue_type, target_ip, timestamp) VALUES (?, ?, ?, ?)",
+                (remediation_id, issue_type, target_ip, datetime.now().isoformat())
+            )
+            conn.commit()
+        except Exception as e:
+            logging.error(f"Error adding suppression: {e}")
+        finally:
+            conn.close()
+
+    def remove_suppression(self, remediation_id):
+        conn = self.get_connection()
+        try:
+            conn.execute("DELETE FROM suppressed_issues WHERE remediation_id = ?", (remediation_id,))
+            conn.commit()
+        except Exception as e:
+            logging.error(f"Error removing suppression: {e}")
         finally:
             conn.close()

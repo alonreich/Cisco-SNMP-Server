@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Cisco SNMP Master{% endblock %}</title>
+    <link rel="icon" href="data:,">
+
     <script src="/static/tailwind.min.js?v={{ range(1, 999) | random }}"></script>
     <script>
         tailwind.config = {
@@ -11,10 +13,10 @@
                 extend: {
                     colors: {
                         surface: { 
-                            900: '#334155', // Brightened background (Slate 700)
-                            800: '#3f4e65', // Lighter surface
-                            700: '#475569', // Borders and Hover
-                            600: '#64748b'  // Muted text and high-contrast borders
+                            900: '#0f172a', // Slate 900
+                            800: '#1e293b', // Slate 800
+                            700: '#334155', // Slate 700
+                            600: '#475569'  // Slate 600
                         },
                         accent: { DEFAULT: '#3b82f6', dim: '#2563eb', glow: '#93c5fd' },
                     },
@@ -33,7 +35,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         body { 
-            background: #334155;
+            background: #0f172a;
             color: #f1f5f9;
             font-family: 'Inter', system-ui, sans-serif;
             margin: 0;
@@ -43,9 +45,9 @@
 
         /* Scrollbar */
         ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #334155; }
-        ::-webkit-scrollbar-thumb { background: #64748b; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
 
         .nav-link { 
             padding: 0.625rem 1.125rem; 
@@ -76,12 +78,12 @@
         }
         .btn-primary { background: #3b82f6; color: white; }
         .btn-primary:hover { background: #2563eb; transform: translateY(-1px); }
-        .btn-secondary { background: #475569; color: #f1f5f9; border: 1px solid #64748b; }
-        .btn-secondary:hover { background: #64748b; }
+        .btn-secondary { background: #1e293b; color: #f1f5f9; border: 1px solid #334155; }
+        .btn-secondary:hover { background: #334155; }
 
         input, select { 
-            background: #1e293b; 
-            border: 1px solid #475569; 
+            background: #020617; 
+            border: 1px solid #334155; 
             color: #f1f5f9; 
             border-radius: 0.5rem; 
             padding: 0.5rem 0.875rem;
@@ -103,8 +105,8 @@
             width: 100%;
             max-width: 500px;
             height: 100vh;
-            background: #3f4e65;
-            border-left: 1px solid #64748b;
+            background: #1e293b;
+            border-left: 1px solid #475569;
             z-index: 1000;
             transition: right 0.35s cubic-bezier(0.4, 0, 0.2, 1);
             padding: 2.5rem;
@@ -131,8 +133,8 @@
             left: -320px;
             width: 320px;
             height: 100vh;
-            background: #3f4e65;
-            border-right: 1px solid #64748b;
+            background: #1e293b;
+            border-right: 1px solid #475569;
             z-index: 950;
             transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             padding: 2rem;
@@ -164,7 +166,7 @@
             <span class="text-base font-bold tracking-tight text-white">SNMP<span class="text-blue-300">MASTER</span></span>
         </div>
         <div class="hidden md:flex items-center space-x-2">
-            <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">
+            <a href="/" class="nav-link {% if request.path == '/' or request.path == '/dashboard/' %}active{% endif %}">
                 <i class="fas fa-chart-line"></i> BANDWIDTH
             </a>
             <a href="/topology" class="nav-link {% if request.path == '/topology' %}active{% endif %}">
@@ -177,8 +179,8 @@
                 <i class="fas fa-microchip"></i> CPU
             </a>
             <a href="/memory" class="nav-link {% if request.path == '/memory' %}active{% endif %}"><i class="fas fa-memory"></i> Memory</a>
-            <a href="/devices" class="nav-link {% if request.path == '/devices' %}active{% endif %}"><i class="fas fa-edit"></i> Add/Remove Device</a>
             <a href="/config-history" class="nav-link {% if request.path == '/config-history' %}active{% endif %}"><i class="fas fa-history"></i> Configs</a>
+            <a href="/devices" class="nav-link {% if request.path == '/devices' %}active{% endif %}"><i class="fas fa-edit"></i> Add/Remove Device</a>
         </div>
         <div class="flex items-center gap-4">
             <button id="mobile_menu_btn" class="md:hidden p-2 text-slate-300 hover:text-white" aria-label="Open navigation menu" onclick="toggleMobileNav()">
@@ -201,8 +203,8 @@
         <a href="/troubleshooting" class="nav-link {% if request.path == '/troubleshooting' %}active{% endif %}"><i class="fas fa-shield-alt"></i> Troubleshooting</a>
         <a href="/cpu" class="nav-link {% if request.path == '/cpu' %}active{% endif %}"><i class="fas fa-microchip"></i> CPU</a>
         <a href="/memory" class="nav-link {% if request.path == '/memory' %}active{% endif %}"><i class="fas fa-memory"></i> Memory</a>
-        <a href="/devices" class="nav-link {% if request.path == '/devices' %}active{% endif %}"><i class="fas fa-edit"></i> Add/Remove Device</a>
         <a href="/config-history" class="nav-link {% if request.path == '/config-history' %}active{% endif %}"><i class="fas fa-history"></i> Configs</a>
+        <a href="/devices" class="nav-link {% if request.path == '/devices' %}active{% endif %}"><i class="fas fa-edit"></i> Add/Remove Device</a>
     </div>
 
     <main class="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-4 min-h-screen">
@@ -275,7 +277,7 @@
                             <section>
                                 <h3 class="text-xs font-bold uppercase text-slate-400 mb-3 tracking-widest">Telemetry Overview</h3>
                                 <div class="grid grid-cols-2 gap-4">
-                                    ${d.target_type !== 'vmware' ? `
+                                    ${(d.target_type === 'cisco' || !d.target_type) ? `
                                     <div class="bg-surface-900 p-4 rounded-xl border border-surface-700 shadow-inner">
                                         <p class="text-xs text-slate-500 font-bold mb-1">CPU Load</p>
                                         <p class="text-2xl font-black text-white">${d.cpu || 0}%</p>
@@ -283,7 +285,7 @@
                                     ` : `
                                     <div class="bg-surface-900 p-4 rounded-xl border border-surface-700 shadow-inner">
                                         <p class="text-xs text-slate-500 font-bold mb-1">Platform</p>
-                                        <p class="text-sm font-black text-purple-300">VMware ${escapeHtml((d.hostname || '').toLowerCase().includes('esxi') ? 'ESXi' : 'VCSA/VM')}</p>
+                                        <p class="text-sm font-black ${d.target_type === 'vcsa' ? 'text-purple-300' : 'text-green-300'}">${d.target_type === 'vcsa' ? 'VMware VCSA' : 'VMware ESXi'}</p>
                                     </div>
                                     `}
                                     <div class="bg-surface-900 p-4 rounded-xl border border-surface-700 shadow-inner">
@@ -291,7 +293,7 @@
                                         <p class="text-2xl font-black ${d.status === 'online' ? 'text-green-400' : 'text-red-400'}">${escapeHtml(d.status ? d.status.toUpperCase() : 'UNKNOWN')}</p>
                                     </div>
                                 </div>
-                                ${d.target_type === 'vmware' ? `
+                                ${(d.target_type === 'esxi' || d.target_type === 'vmware' || d.target_type === 'vcsa') ? `
                                 <p class="text-xs text-slate-500 mt-3 italic opacity-75">Notice: Real-time CPU/Memory metrics are unavailable for VMware vSphere via standard SNMP MIBs.</p>
                                 ` : ''}
                             </section>

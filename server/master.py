@@ -38,8 +38,8 @@ def load_config():
         except Exception: pass
     if not os.path.isabs(defaults['history']['db_path']):
         defaults['history']['db_path'] = os.path.join(PROJECT_ROOT, defaults['history']['db_path'])
-    if not os.path.isabs(defaults['logging']['file']):
-        defaults['logging']['file'] = os.path.join(PROJECT_ROOT, defaults['logging']['file'])
+    # Force master.py to always use monitor.log, never flask.log
+    defaults['logging']['file'] = os.path.join(PROJECT_ROOT, 'logs', 'monitor.log')
     return defaults
 
 config = load_config()
@@ -160,7 +160,8 @@ async def snmp_walk(engine, ip, base_oid, credentials):
                     oid_str = str(vb[0])
                     if not oid_str.startswith(base_oid): return results
                     results[oid_str.replace(base_oid + '.', '').replace(base_oid, '')] = str(vb[1])
-    except: pass
+    except Exception as e:
+        logger.error(f'snmp_walk error: {e}')
     return results
 
 def is_physical_port(name):
@@ -169,11 +170,12 @@ def is_physical_port(name):
     # Exclude logical/virtual interfaces
     if any(x in p for x in ['vlan', 'loopback', 'null', 'tunnel', 'virtual', 'management']):
         return False
-    # Include physical and Port-channels
-    prefixes = ['gi', 'fa', 'te', 'tw', 'fi', 'hu', 'po', 'et', 'ge', 'fe']
+    # Include physical and Port-channels + VMware vmnic
+    prefixes = ['gi', 'fa', 'te', 'tw', 'fi', 'hu', 'po', 'et', 'ge', 'fe', 'vmnic']
     return any(p.startswith(pre) for pre in prefixes)
 
-async def poll_device(engine, s):
+async def poll_device(engine_ignored, s):
+    engine = SnmpEngine()
     ip = s['ip']
     target_type = s.get('target_type', 'cisco')
     credentials = get_credentials(s)
@@ -187,7 +189,7 @@ async def poll_device(engine, s):
         sys_uptime = await snmp_get(engine, ip, OID_SYSUPTIME, credentials)
         db.update_device({'ip': ip, 'status': 'online', 'sys_name': sys_name, 'hostname': sys_name, 'sys_descr': sys_descr, 'sys_uptime': sys_uptime})
 
-        if target_type == 'vmware':
+        if target_type in ('vmware', 'esxi', 'vcsa'):
             cpu_walk = await snmp_walk(engine, ip, '1.3.6.1.2.1.25.3.3.1.2', credentials)
             cpu_vals = [float(v) for v in cpu_walk.values() if v and str(v).strip()]
             if cpu_vals:
@@ -286,9 +288,8 @@ async def poll_device(engine, s):
         logger.error(f"Error polling {ip}: {e}")
 
 async def run_cycle():
-    engine = SnmpEngine()
     monitored = config.get('monitored_switches', [])
-    await asyncio.gather(*[poll_device(engine, s) for s in monitored])
+    await asyncio.gather(*[poll_device(None, s) for s in monitored])
     db.cleanup_old_records(config['history']['retention_days'])
     db.enforce_size_limit(max_mb=20)
 

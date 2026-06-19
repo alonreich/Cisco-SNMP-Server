@@ -9,7 +9,7 @@
         font-size: 13px; 
         line-height: 1.6;
         white-space: pre-wrap; 
-        background: #1e293b; 
+        background: #020617; 
         padding: 1.5rem; 
         border-radius: 0.75rem; 
         max-height: 600px; 
@@ -19,8 +19,8 @@
         box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
     }
     .snap-card {
-        background: #3f4e65;
-        border: 1px solid #475569;
+        background: #1e293b;
+        border: 1px solid #334155;
         border-radius: 0.75rem;
         padding: 1rem;
         cursor: pointer;
@@ -30,7 +30,7 @@
         text-align: left;
         font-family: inherit;
     }
-    .snap-card:hover { border-color: #3b82f6; background: #475569; transform: translateX(4px); }
+    .snap-card:hover { border-color: #3b82f6; background: #334155; transform: translateX(4px); }
     .snap-card.active { border-color: #3b82f6; background: rgba(59,130,246,0.1); ring: 2px solid rgba(59,130,246,0.2); }
     .snap-card:focus-visible { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5); }
 </style>
@@ -51,11 +51,17 @@
         
         <div class="flex items-center gap-4">
             <div class="flex items-center gap-3">
+                <label for="device_type_filter" class="text-xs font-bold text-slate-400 uppercase tracking-widest">Device Type</label>
+                <select id="device_type_filter" aria-label="Filter device type" class="w-44" onchange="filterDeviceList()">
+                    <option value="cisco">Cisco Switches</option>
+                    <option value="esxi">ESXi/VCSA</option>
+                    <option value="all">All Devices</option>
+                </select>
+            </div>
+            <div class="flex items-center gap-3">
                 <label for="device_select" class="text-xs font-bold text-slate-400 uppercase tracking-widest">Target Device</label>
                 <select id="device_select" aria-label="Select device" class="w-56" onchange="loadConfigList()">
-                    {% for ip, device in devices.items() %}
-                    <option value="{{ ip }}">{{ device.hostname or ip }}</option>
-                    {% endfor %}
+                    <!-- Options populated via JS -->
                 </select>
             </div>
             <div class="flex items-center gap-3">
@@ -125,11 +131,48 @@
 </div>
 
 <script>
+let allDevices = [
+    {% for ip, device in devices.items() %}
+    { ip: "{{ ip }}", hostname: "{{ device.hostname or ip }}", type: "{{ device.target_type | default('cisco') }}" },
+    {% endfor %}
+];
+
+function filterDeviceList() {
+    const filter = document.getElementById('device_type_filter').value;
+    const select = document.getElementById('device_select');
+    select.innerHTML = '';
+    
+    let filtered = allDevices;
+    if (filter === 'cisco') {
+        filtered = allDevices.filter(d => !d.type || d.type === 'cisco' || d.type === 'switch');
+    } else if (filter === 'esxi') {
+        filtered = allDevices.filter(d => d.type === 'esxi' || d.type === 'vcsa');
+    }
+
+    if (filtered.length === 0) {
+        select.innerHTML = '<option value="">No devices found</option>';
+    } else {
+        filtered.forEach(d => {
+            const opt = document.createElement('option');
+            opt.value = d.ip;
+            opt.textContent = d.hostname;
+            select.appendChild(opt);
+        });
+    }
+    
+    loadConfigList();
+}
+
 function loadConfigList() {
     const ip = document.getElementById('device_select').value;
     const type = document.getElementById('config_type_select').value;
     const list = document.getElementById('config_list');
     
+    if (!ip) {
+        list.innerHTML = '<div class="p-8 text-center border-2 border-dashed border-surface-700 rounded-2xl text-slate-500 text-sm italic">No device selected.</div>';
+        return;
+    }
+
     list.innerHTML = '<div class="p-8 text-center text-slate-500"><i class="fas fa-circle-notch fa-spin text-2xl mb-3"></i><br>Fetching History...</div>';
 
     fetch(`/api/device/${encodeURIComponent(ip)}/config?type=${type}`)
@@ -260,6 +303,6 @@ function escapeHtml(text) {
         .replace(/'/g, "&#039;");
 }
 
-loadConfigList();
+filterDeviceList();
 </script>
 {% endblock %}

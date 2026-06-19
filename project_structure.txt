@@ -18,6 +18,7 @@
   ├── uninstall.bat               Full reversal (kill PIDs, remove task, wipe folder)
   ├── restart_server.bat          Kill-and-relaunch both services
   ├── project_structure.txt       THIS FILE — the definitive reference
+  ├── AI-Agent-Prompt.txt         Internal UX/UI audit prompt (gitignored)
   ├── README.md                   GitHub-facing project summary
   │
   ├── config\                     All configuration and dynamic config files
@@ -43,7 +44,8 @@
   │   │   ├── troubleshooting.html Security audit and device hardening remediation guide
   │   │   ├── cpu_v2.html         CPU monitor (per-device time-series charts)
   │   │   ├── memory.html         Memory monitor (pool-level usage charts)
-  │   │   └── config_history.html Configuration change log viewer
+  │   │   ├── config_history.html Configuration change log viewer
+  │   │   └── devices.html        Device management (add/edit/remove monitored targets)
   │   ├── static\                 Browser-served assets (Flask static_folder)
   │   │   ├── tailwind.min.js     Tailwind CSS JIT compiler (client-side)
   │   │   └── vmware_overlay.png  VMware badge overlay for topology nodes
@@ -100,6 +102,7 @@
        - Throughput: 1.3.6.1.2.1.31.1.1.1.6 (HC In) / .10 (HC Out)
        - Topology: 1.0.8802.1.1.2.1.4.1.1.9 (LLDP) / 1.3.6.1.4.1.9.9.23.1.2.1.1.6 (CDP)
        - Memory: 1.3.6.1.4.1.9.9.48.1.1.1 (Cisco Memory Pool)
+       - Port-Channels: 1.2.840.10006.3000.1.1.2.1.1 (dot3adAggPortSelectedAggID — LACP LAG membership)
 
   B. THE PERSISTENCE (database\history_db.py):
      • Schema:
@@ -107,6 +110,7 @@
        - [interface_history]: in/out octets (raw 64-bit counters), speed, admin/oper.
        - [cpu_history] / [memory_history]: Time-series telemetry.
        - [topology]: neighbor relationships (local_port → remote_id/port).
+       - [port_channels]: LACP LAG membership (physical interface → port-channel index).
      • Maintenance: Automatic FIFO trimming (Size capped at 20MB via VACUUM).
 
   C. THE BROADCASTER (server\main.py):
@@ -142,7 +146,7 @@
     restored automatically. Default: Cisco Switches + Top 10.
 
   LEADERBOARD COLUMN ARCHITECTURE (STRICT):
-  1. [DEVICE] (110px-150px):
+  1. [DEVICE] (100px fixed):
      - Data: Management IP (bold, text-sm) + (TYPE) in 8px grey font.
      - Types: switch, esxi, vcsa (derived from target_type + hostname).
      - Action: Clicking triggers an ALPHABETICAL drill-down of all interfaces.
@@ -170,12 +174,22 @@
   • /cpu              — Per-device CPU time-series with selectable time ranges.
   • /memory           — Per-device memory pool usage charts.
   • /config-history   — Chronological configuration change log.
+  • /devices          — Device management (add, edit, remove monitored SNMP targets
+                        with v2c/v3 credential configuration).
 
 ────────────────────────────────────────────────────────────────────────────────
   5. MONITORED DEVICE TYPES
 ────────────────────────────────────────────────────────────────────────────────
   Devices are defined in config\config.json under "monitored_switches".
-  Each entry specifies: ip, community, polling_interval, target_type.
+  Each entry specifies: ip, community (or SNMPv3 credentials), target_type.
+
+  SNMP AUTHENTICATION:
+  • v2c (default): Requires "community" string per device (or inherits from
+    the global snmp.community setting).
+  • v3 (optional): When "snmp_version" is set to 3, the following fields
+    are used: username, auth_protocol (sha|md5), auth_key, priv_protocol
+    (aes|des), priv_key. The Device Management UI exposes these via a
+    v2c/v3 radio toggle.
 
   TARGET TYPES:
   • "cisco"  — Cisco IOS/IOS-XE switches. Full telemetry (CPU, memory,
@@ -183,8 +197,10 @@
   • "vmware" — VMware hosts. Further classified at the UI layer:
                - ESXi: hostname does NOT contain 'vcenter' or 'appliance'.
                - VCSA: hostname contains 'vcenter' or 'appliance'.
-               Note: CPU/Memory OIDs are Cisco-specific and return no
-               data for VMware targets. Interface and topology data works.
+               CPU and Memory are polled via standard Host Resources MIB
+               (RFC 2790): CPU from hrProcessorTable (1.3.6.1.2.1.25.3.3.1.2),
+               Memory from hrStorageTable (1.3.6.1.2.1.25.2.3.1.*).
+               Interface and topology (LLDP/CDP) data also works.
 
 ────────────────────────────────────────────────────────────────────────────────
   6. API ENDPOINTS
@@ -192,17 +208,23 @@
   All endpoints return JSON. No authentication (see config.json.example for
   future auth scaffold).
 
-  GET  /                           Dashboard HTML page
+  GET  /                           Redirects to /dashboard/ (HTTP 302)
+  GET  /dashboard/                 Dashboard HTML page
   GET  /topology                   Topology HTML page
   GET  /troubleshooting            Troubleshooting and Audit HTML page
   GET  /cpu                        CPU monitor HTML page
   GET  /memory                     Memory monitor HTML page
   GET  /config-history             Config history HTML page
+  GET  /devices                    Device management HTML page
   GET  /api/devices                All devices + leaderboard JSON
+  POST /api/devices                Add or update a device (body: JSON device object)
+  DELETE /api/devices/<ip>          Remove a monitored device
   GET  /api/topology               Topology links + device list
   POST /api/topology/positions     Save vis.js node positions (body: JSON object)
   GET  /api/device/<ip>/details    Single device detail + CPU history + alerts
   GET  /api/device/<ip>/history    Time-series data (?metric=cpu|memory&hours=1|6|24|168)
+  GET  /api/device/<ip>/config     Configuration snapshots (?type=running|startup)
+  POST /api/device/<ip>/config/pull  Live config extraction (not yet implemented)
   GET  /api/alerts                 Alert log (?ip=x.x.x.x&limit=50)
 
   WEBSOCKET EVENT:
@@ -258,15 +280,14 @@
   8. CONFIGURATION REFERENCE (config\config.json)
 ────────────────────────────────────────────────────────────────────────────────
   {
-    "server":   { "port": 8000 },
+    "server":   { "host": "0.0.0.0", "port": 8000, "debug": false },
     "snmp":     { "community": "...", "timeout": 2, "retries": 1 },
     "monitored_switches": [
-      { "ip": "x.x.x.x", "community": "...", "polling_interval": 30,
-        "target_type": "cisco|vmware" }
+      { "ip": "x.x.x.x", "community": "...", "target_type": "cisco|vmware" }
     ],
+    "polling":  { "interval_seconds": 30 },
     "history":  { "retention_days": 30, "db_path": "database/history.db" },
-    "logging":  { "level": "INFO", "file": "logs/flask.log", "max_size_mb": 5 },
-    "display_limit": 30
+    "logging":  { "level": "INFO", "file": "logs/flask.log", "max_size_mb": 5 }
   }
 
   NOTE: Relative paths in config.json (db_path, logging file) are resolved

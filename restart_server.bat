@@ -20,8 +20,8 @@ if %errorlevel% neq 0 (
 )
 
 echo Terminating existing processes (Forced)...
-powershell -Command "Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force" >nul 2>&1
-timeout /t 2 /nobreak >nul
+taskkill /F /IM python.exe >nul 2>&1
+ping 127.0.0.1 -n 3 >nul
 
 echo Cleaning stale logs...
 :clearmonitor
@@ -56,4 +56,4 @@ echo.
 echo ======================================================
 echo   Server and Polling Engine restarted (Clean State)
 echo ======================================================
-timeout /t 3 >nul
+ping 127.0.0.1 -n 4 >nul

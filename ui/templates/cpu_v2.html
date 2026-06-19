@@ -175,9 +175,10 @@ function filterDevices(shouldSelectDefaults) {
             typeMatch = true;
         } else if (deviceFilter === 'cisco') {
             typeMatch = targetType === 'cisco';
-        } else if (targetType === 'vmware') {
-            if (deviceFilter === 'esxi') typeMatch = !hostname.includes('vcenter') && !hostname.includes('appliance');
-            if (deviceFilter === 'vcsa') typeMatch = hostname.includes('vcenter') || hostname.includes('appliance');
+        } else if (deviceFilter === 'esxi') {
+            typeMatch = targetType === 'esxi' || targetType === 'vmware';
+        } else if (deviceFilter === 'vcsa') {
+            typeMatch = targetType === 'vcsa';
         }
 
         if (searchMatch && typeMatch) {
@@ -345,13 +346,21 @@ function loadAlerts() {
 function renderChart() {
     if (chart) chart.destroy();
 
+    const range = parseInt(document.getElementById('time_range_filter').value);
+    const formatTime = (ts) => {
+        if (!ts) return '';
+        const s = String(ts);
+        if (s.length < 16) return s;
+        return (range > 12) ? s.substring(5, 16).replace('-', '/') : s.substring(11, 19);
+    };
+
     const datasets = selectedDevices.map((ip, i) => {
         const hostname = document.querySelector(`.device-row[data-ip="${ip}"]`).getAttribute('data-hostname');
         const data = deviceData[ip] || [];
         const color = colorPalette[i % colorPalette.length];
         return {
             label: hostname,
-            data: data.map(d => ({ x: d[0].substring(11, 19), y: d[1] })),
+            data: data.map(d => ({ x: formatTime(d[0]), y: d[1] })),
             borderColor: color,
             backgroundColor: color + '15',
             fill: selectedDevices.length === 1,
@@ -364,7 +373,7 @@ function renderChart() {
     let labels = [];
     if (selectedDevices.length > 0) {
         const primaryIp = selectedDevices[0];
-        labels = (deviceData[primaryIp] || []).map(d => d[0].substring(11, 19));
+        labels = (deviceData[primaryIp] || []).map(d => formatTime(d[0]));
     }
 
     const ctx = document.getElementById('cpu_chart').getContext('2d');
@@ -410,16 +419,26 @@ function exportCSV() {
 }
 
 function loadPreferences() {
-    const savedType = localStorage.getItem('cpu_device_filter');
-    if (savedType) document.getElementById('device_type_filter').value = savedType;
+    const savedType = localStorage.getItem('device_type_filter');
+    if (savedType) {
+        document.getElementById('device_type_filter').value = savedType;
+    } else {
+        document.getElementById('device_type_filter').value = 'cisco';
+        localStorage.setItem('device_type_filter', 'cisco');
+    }
 
-    const savedRange = localStorage.getItem('cpu_time_range');
-    if (savedRange) document.getElementById('time_range_filter').value = savedRange;
+    const savedRange = localStorage.getItem('time_range_filter');
+    if (savedRange) {
+        document.getElementById('time_range_filter').value = savedRange;
+    } else {
+        document.getElementById('time_range_filter').value = '24';
+        localStorage.setItem('time_range_filter', '24');
+    }
 }
 
 function savePreferences() {
-    localStorage.setItem('cpu_device_filter', document.getElementById('device_type_filter').value);
-    localStorage.setItem('cpu_time_range', document.getElementById('time_range_filter').value);
+    localStorage.setItem('device_type_filter', document.getElementById('device_type_filter').value);
+    localStorage.setItem('time_range_filter', document.getElementById('time_range_filter').value);
 }
 
 document.getElementById('device_type_filter').addEventListener('change', () => {

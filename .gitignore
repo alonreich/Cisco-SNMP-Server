@@ -28,6 +28,9 @@ env/
 # Runtime settings (SNMP communities — do not commit)
 config/config.json
 
+# Internal developer tools
+AI-Agent-Prompt.txt
+
 # Editor / OS
 .idea/
 .vscode/
@@ -37,3 +40,26 @@ Desktop.ini
 
 openclaw/
 tmp/
+# Logs
+logs/
+*.log
+
+# Databases
+database/*.db
+database/*.sqlite
+database/*.sqlite3
+database/*.db-journal
+*.db
+*.sqlite3
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Agent/AI Tooling
+.aider*
+.agy*
+.openclaw*
+.gemini/
+

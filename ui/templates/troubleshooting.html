@@ -33,6 +33,9 @@
                 <span class="block text-[9px] font-bold text-yellow-400 uppercase">High/Medium</span>
                 <span id="high_med_count_el" class="text-sm font-black text-yellow-400">{{ high_medium_count }}</span>
             </div>
+            <button onclick="openSuppressionModal()" class="px-4 py-2 bg-slate-500/10 text-slate-400 hover:bg-slate-500/20 hover:text-white border border-slate-500/20 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center justify-center">
+                <i class="fas fa-eye-slash mr-2"></i> Suppressions
+            </button>
         </div>
     </div>
 </div>
@@ -55,7 +58,7 @@
             </thead>
             <tbody id="issues_tbody">
                 {% for issue in detected_issues %}
-                <tr data-severity="{{ issue.data_severity }}" class="hover:bg-white/[0.01] transition-colors">
+                <tr data-issue-id="{{ issue.remediation_id }}" data-severity="{{ issue.data_severity }}" class="hover:bg-white/[0.01] transition-colors" oncontextmenu="showSuppressionMenu(event, '{{ issue.remediation_id }}', '{{ issue.issue_family|default('') }}')">
                     <td class="px-4 py-3 text-center align-middle border border-black">
                         <span class="px-1.5 py-0.5 {{ issue.severity_class }} text-[9px] font-black uppercase rounded">{{ issue.severity_label }}</span>
                     </td>
@@ -74,7 +77,7 @@
                         </div>
                     </td>
                     <td class="px-4 py-3 text-center align-middle border border-black">
-                        <div class="bg-surface-900/60 p-2 rounded-lg border border-surface-700 font-mono text-[11px] text-slate-300 space-y-0.5 mx-auto text-center">
+                        <div class="target-info-container bg-surface-900/60 p-2 rounded-lg border border-surface-700 font-mono text-[11px] text-slate-300 space-y-0.5 mx-auto text-center">
                             {% for line in issue.target_device_info.split('\n') %}
                             <span class="block {% if loop.first %}{% if 'Offline' in line or 'Unreachable' in line %}font-bold text-red-300{% elif 'VMware' in line %}font-bold text-purple-300{% else %}font-bold text-blue-300{% endif %}{% elif loop.last and 'Connect' in line %}text-[9px] text-slate-500 mt-1 font-sans italic{% else %}text-slate-300{% endif %}">{{ line }}</span>
                             {% endfor %}
@@ -108,8 +111,129 @@
     </div>
 </div>
 
+<!-- Suppression Context Menu -->
+<div id="suppress_menu" class="hidden fixed z-50 bg-surface-800 border border-surface-700 rounded-lg shadow-xl text-sm w-64 overflow-hidden">
+    <div class="px-4 py-2 bg-surface-900 border-b border-surface-700 font-bold text-slate-300 text-xs uppercase tracking-wider">Acknowledge / Suppress</div>
+    <ul class="py-1 text-slate-300">
+        <li><button onclick="suppressIssue('specific')" class="w-full text-left px-4 py-2 hover:bg-surface-700 hover:text-white transition-colors cursor-pointer"><i class="fas fa-eye-slash mr-2 text-slate-400"></i>Suppress this exact issue</button></li>
+        <li><button onclick="suppressIssue('family')" class="w-full text-left px-4 py-2 hover:bg-surface-700 hover:text-white transition-colors cursor-pointer"><i class="fas fa-layer-group mr-2 text-slate-400"></i>Suppress all issues of this type</button></li>
+    </ul>
+</div>
+
+<!-- Clear Suppression Modal -->
+<div id="suppression_modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div class="bg-surface-800 border border-surface-700 rounded-xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[80vh]">
+        <div class="px-6 py-4 bg-surface-900 border-b border-surface-700 flex justify-between items-center">
+            <h3 class="text-lg font-bold text-white"><i class="fas fa-eye-slash mr-2 text-blue-400"></i>Active Suppressed Issues</h3>
+            <button onclick="closeSuppressionModal()" class="text-slate-400 hover:text-white cursor-pointer"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="p-6 overflow-y-auto flex-1 bg-surface-800">
+            <p class="text-sm text-slate-400 mb-4">Showing suppressed issues that are currently still actively detected. If a suppressed issue is resolved, it is automatically removed from this list.</p>
+            <div id="suppressed_list" class="space-y-3">
+                <!-- Populated via JS -->
+            </div>
+        </div>
+        <div class="px-6 py-4 bg-surface-900 border-t border-surface-700 text-right">
+            <button onclick="closeSuppressionModal()" class="px-4 py-2 bg-surface-700 hover:bg-surface-600 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer">Close</button>
+        </div>
+    </div>
+</div>
+
 <script>
+    let activeIssueIdToSuppress = null;
+    let activeIssueFamilyToSuppress = null;
     let allIssues = {{ detected_issues | tojson }};
+
+    function showSuppressionMenu(e, id, family) {
+        e.preventDefault();
+        activeIssueIdToSuppress = id;
+        activeIssueFamilyToSuppress = family;
+        const menu = document.getElementById('suppress_menu');
+        menu.style.left = `${e.pageX}px`;
+        menu.style.top = `${e.pageY}px`;
+        menu.classList.remove('hidden');
+    }
+
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('#suppress_menu')) {
+            document.getElementById('suppress_menu').classList.add('hidden');
+        }
+    });
+
+    async function suppressIssue(type) {
+        document.getElementById('suppress_menu').classList.add('hidden');
+        if (!activeIssueIdToSuppress) return;
+        
+        let payload = { id: activeIssueIdToSuppress };
+        if (type === 'family' && activeIssueFamilyToSuppress) {
+            payload = { id: 'family:' + activeIssueFamilyToSuppress, family: activeIssueFamilyToSuppress };
+        }
+
+        try {
+            await fetch('/api/suppressions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (allIssues.length > 0) {
+                allIssues.forEach(i => {
+                    if (type === 'family') {
+                        if (i.issue_family === activeIssueFamilyToSuppress) i.is_suppressed = true;
+                    } else {
+                        if (i.remediation_id === activeIssueIdToSuppress) i.is_suppressed = true;
+                    }
+                });
+                renderIssues(allIssues);
+            }
+        } catch (e) {
+            console.error('Failed to suppress', e);
+        }
+    }
+
+    function openSuppressionModal() {
+        const modal = document.getElementById('suppression_modal');
+        const list = document.getElementById('suppressed_list');
+        const suppressed = allIssues.filter(i => i.is_suppressed);
+        
+        if (suppressed.length === 0) {
+            list.innerHTML = '<div class="text-center py-8 text-slate-500"><i class="fas fa-check-circle text-3xl mb-2"></i><p>No active issues are currently suppressed.</p></div>';
+        } else {
+            list.innerHTML = suppressed.map(i => `
+                <div class="flex justify-between items-center p-4 bg-surface-900 border border-surface-700 rounded-lg">
+                    <div>
+                        <div class="font-bold text-white text-sm flex items-center gap-2">
+                            <span class="px-1.5 py-0.5 ${i.severity_class} text-[9px] font-black uppercase rounded">${i.severity_label}</span>
+                            ${i.title}
+                        </div>
+                        <div class="text-xs text-slate-400 mt-1">${(i.target_device_info || '').split('\\n')[0]}</div>
+                    </div>
+                    <button onclick="unsuppressIssue('${i.remediation_id}', '${i.issue_family || ''}')" class="px-3 py-1.5 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white rounded border border-red-500/20 text-xs font-bold transition-colors cursor-pointer">
+                        <i class="fas fa-undo mr-1"></i> Clear Suppression
+                    </button>
+                </div>
+            `).join('');
+        }
+        modal.classList.remove('hidden');
+    }
+
+    function closeSuppressionModal() {
+        document.getElementById('suppression_modal').classList.add('hidden');
+    }
+
+    async function unsuppressIssue(id, family) {
+        try {
+            await fetch(`/api/suppressions?id=${id}`, { method: 'DELETE' });
+            if (family) await fetch(`/api/suppressions?id=family:${family}`, { method: 'DELETE' });
+            
+            allIssues.forEach(i => {
+                if (i.remediation_id === id || i.issue_family === family) i.is_suppressed = false;
+            });
+            openSuppressionModal();
+            renderIssues(allIssues);
+        } catch(e) {
+            console.error('Failed to unsuppress', e);
+        }
+    }
 
     function escapeHtml(unsafe) {
         if (typeof unsafe !== 'string') return '';
@@ -118,23 +242,25 @@
 
     function getDeviceCategory(issue) {
         if (issue.is_global) return null;
-        if (issue.target_type === 'cisco') return 'cisco';
-        if (issue.target_type === 'vmware') {
-            const hn = (issue.hostname || '').toLowerCase();
-            return (hn.includes('vcenter') || hn.includes('appliance')) ? 'vcsa' : 'esxi';
-        }
+        if (issue.target_type === 'vcsa') return 'vcsa';
+        if (issue.target_type === 'esxi') return 'esxi';
+        if (issue.target_type === 'vmware') return 'esxi';
         return 'cisco';
     }
+
+    let activeSuppressions = [];
 
     function renderIssues(issues) {
         const filter = document.getElementById('device_type_filter').value;
         
         const filteredIssues = issues.filter(issue => {
+            if (issue.is_suppressed) return false;
             if (filter === 'all') return true;
             const category = getDeviceCategory(issue);
             if (issue.is_global) {
                 if (filter === 'cisco' && issue.target_type === 'cisco') return true;
-                if ((filter === 'esxi' || filter === 'vcsa') && issue.target_type === 'vmware') return true;
+                if (filter === 'esxi' && (issue.target_type === 'esxi' || issue.target_type === 'vmware')) return true;
+                if (filter === 'vcsa' && issue.target_type === 'vcsa') return true;
                 return false;
             }
             return category === filter;
@@ -143,7 +269,7 @@
         const tbody = document.getElementById('issues_tbody');
         document.getElementById('total_count_el').textContent = filteredIssues.length;
         document.getElementById('critical_count_el').textContent = filteredIssues.filter(iss => iss.data_severity === 'critical').length;
-        document.getElementById('high_med_count_el').textContent = filteredIssues.filter(iss => iss.data_severity === 'high-medium').length;
+        document.getElementById('high_med_count_el').textContent = filteredIssues.filter(iss => iss.data_severity === 'high' || iss.data_severity === 'medium').length;
         
         if (filteredIssues.length === 0) {
             tbody.innerHTML = `
@@ -157,6 +283,36 @@
                     </td>
                 </tr>
             `;
+            return;
+        }
+
+        const existingRows = Array.from(tbody.querySelectorAll('tr[data-issue-id]'));
+        const existingIds = existingRows.map(tr => tr.getAttribute('data-issue-id'));
+        const newIds = filteredIssues.map(i => i.remediation_id);
+        
+        // If the exact same issues exist, just update their dynamic text (target info) silently
+        if (existingIds.length === newIds.length && existingIds.every((id, i) => id === newIds[i])) {
+            filteredIssues.forEach((issue) => {
+                const row = tbody.querySelector(`tr[data-issue-id="${issue.remediation_id}"]`);
+                if (row) {
+                    const targetInfoContainer = row.querySelector('.target-info-container');
+                    if (targetInfoContainer) {
+                        targetInfoContainer.innerHTML = (issue.target_device_info || '').split('\n').map((line, i, arr) => {
+                            let lineClass = 'text-slate-300';
+                            if (i === 0) {
+                                if (line.includes('Offline') || line.includes('Unreachable')) lineClass = 'font-bold text-red-300';
+                                else if (line.includes('VMware')) lineClass = 'font-bold text-purple-300';
+                                else lineClass = 'font-bold text-blue-300';
+                            } else if (i === arr.length - 1 && line.includes('Connect')) {
+                                lineClass = 'text-[9px] text-slate-500 mt-1 font-sans italic';
+                            }
+                            return `<span class="block ${lineClass}">${escapeHtml(line)}</span>`;
+                        }).join('');
+                    }
+                }
+            });
+            initializeTooltips();
+            initializeCopyButtons();
             return;
         }
 
@@ -174,8 +330,8 @@
             }).join('');
 
             return `
-                <tr data-severity="${issue.data_severity}" class="hover:bg-white/[0.01] transition-colors">
-                    <td class="px-4 py-3 text-center align-middle border border-black"><span class="px-1.5 py-0.5 ${issue.severity_class} text-[9px] font-black uppercase rounded">${escapeHtml(issue.severity_label)}</span></td>
+                <tr data-issue-id="${escapeHtml(issue.remediation_id)}" data-issue-family="${escapeHtml(issue.issue_family || '')}" data-severity="${escapeHtml(issue.data_severity)}" class="hover:bg-white/[0.01] transition-colors" oncontextmenu="showSuppressionMenu(event, '${escapeHtml(issue.remediation_id)}', '${escapeHtml(issue.issue_family || '')}')">
+                    <td class="px-4 py-3 text-center align-middle border border-black"><span class="px-1.5 py-0.5 ${escapeHtml(issue.severity_class)} text-[9px] font-black uppercase rounded">${escapeHtml(issue.severity_label)}</span></td>
                     <td class="px-4 py-3 text-center align-middle border border-black cursor-help issue-cell"
                         data-title="${escapeHtml(issue.title)}" data-why="${escapeHtml(issue.why_problem)}" data-simple="${escapeHtml(issue.simple_terms)}"
                         data-solution="${escapeHtml(issue.solution)}" data-target="${escapeHtml((issue.target_device_info || '').split('\n')[0])}" data-connection="${escapeHtml(issue.connection_type)}">
@@ -184,12 +340,12 @@
                             <span class="inline-flex items-center justify-center text-blue-400"><i class="fas fa-info-circle text-[10px]"></i></span>
                         </div>
                     </td>
-                    <td class="px-4 py-3 text-center align-middle border border-black"><div class="bg-surface-900/60 p-2 rounded-lg border border-surface-700 font-mono text-[11px] text-slate-300 space-y-0.5 mx-auto text-center">${targetInfoHtml}</div></td>
+                    <td class="px-4 py-3 text-center align-middle border border-black"><div class="target-info-container bg-surface-900/60 p-2 rounded-lg border border-surface-700 font-mono text-[11px] text-slate-300 space-y-0.5 mx-auto text-center">${targetInfoHtml}</div></td>
                     <td class="px-4 py-3 text-left align-middle border border-black">
                         <div class="relative group w-full">
-                            <div class="absolute top-1.5 right-1.5 z-20"><button aria-label="Copy command" class="copy-btn p-1 rounded bg-green-500/10 border border-green-500/20 text-green-400 hover:bg-green-500 hover:text-white transition-all cursor-pointer text-xs flex items-center justify-center w-6 h-6 shadow-md" data-element-id="${issue.remediation_id}"><i class="fas fa-copy text-[10px]"></i></button></div>
+                            <div class="absolute top-1.5 right-1.5 z-20"><button aria-label="Copy command" class="copy-btn p-1 rounded bg-green-500/10 border border-green-500/20 text-green-400 hover:bg-green-500 hover:text-white transition-all cursor-pointer text-xs flex items-center justify-center w-6 h-6 shadow-md" data-element-id="${escapeHtml(issue.remediation_id)}"><i class="fas fa-copy text-[10px]"></i></button></div>
                             <div class="text-[9px] font-bold text-slate-400 uppercase mb-0.5">${escapeHtml(issue.remediation_title)}</div>
-                            <pre class="bg-surface-900 p-2.5 pr-10 rounded-lg border border-surface-700 font-mono text-[10px] text-green-400 overflow-x-auto leading-normal max-h-40 w-full" id="${issue.remediation_id}">${escapeHtml(issue.remediation_script)}</pre>
+                            <pre class="bg-surface-900 p-2.5 pr-10 rounded-lg border border-surface-700 font-mono text-[10px] text-green-400 overflow-x-auto leading-normal max-h-40 w-full" id="${escapeHtml(issue.remediation_id)}">${escapeHtml(issue.remediation_script)}</pre>
                         </div>
                     </td>
                 </tr>
@@ -203,7 +359,12 @@
     function filterSeverity(severity) {
         const rows = document.querySelectorAll('#issues_tbody tr');
         rows.forEach(r => {
-            if (severity === 'all' || r.getAttribute('data-severity') === severity) {
+            const sev = r.getAttribute('data-severity');
+            let show = false;
+            if (severity === 'all') show = true;
+            else if (severity === 'critical') show = sev === 'critical';
+            else if (severity === 'high-medium') show = sev === 'high' || sev === 'medium';
+            if (show) {
                 r.classList.remove('hidden');
             } else {
                 r.classList.add('hidden');
@@ -224,7 +385,7 @@
         const text = document.getElementById(elementId)?.textContent;
         if (!text) return;
 
-        navigator.clipboard.writeText(text).then(() => {
+        function showSuccess() {
             const originalHTML = btn.innerHTML;
             btn.innerHTML = '<i class="fas fa-check text-white"></i>';
             btn.classList.remove('bg-green-500/10', 'border-green-500/20', 'text-green-400');
@@ -237,7 +398,25 @@
                 btn.classList.remove('bg-green-500', 'border-green-600', 'text-white', 'cursor-default');
                 btn.disabled = false;
             }, 2000);
-        }).catch(err => console.error('Failed to copy text: ', err));
+        }
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(showSuccess).catch(err => console.error('Failed to copy text: ', err));
+        } else {
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                showSuccess();
+            } catch (err) {
+                console.error('Fallback copy failed', err);
+            }
+            document.body.removeChild(textArea);
+        }
     }
 
     const tooltip = document.getElementById('global_tooltip');

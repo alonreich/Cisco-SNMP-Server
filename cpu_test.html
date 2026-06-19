@@ -1,0 +1,964 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CPU Intelligence & Telemetry Analytics — SNMP Master</title>
+    <link rel="icon" href="data:,">
+
+    <script src="/static/tailwind.min.js?v=941"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        surface: { 
+                            900: '#334155', // Brightened background (Slate 700)
+                            800: '#3f4e65', // Lighter surface
+                            700: '#475569', // Borders and Hover
+                            600: '#64748b'  // Muted text and high-contrast borders
+                        },
+                        accent: { DEFAULT: '#3b82f6', dim: '#2563eb', glow: '#93c5fd' },
+                    },
+                    fontFamily: {
+                        mono: ['JetBrains Mono', 'Consolas', 'monospace'],
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                },
+            },
+        };
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body { 
+            background: #334155;
+            color: #f1f5f9;
+            font-family: 'Inter', system-ui, sans-serif;
+            margin: 0;
+            overflow-x: hidden;
+            line-height: 1.5;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #334155; }
+        ::-webkit-scrollbar-thumb { background: #64748b; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        .nav-link { 
+            padding: 0.625rem 1.125rem; 
+            border-radius: 0.5rem; 
+            transition: all 0.2s ease; 
+            color: #cbd5e1;
+            font-weight: 600;
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            text-decoration: none;
+        }
+        .nav-link:hover { color: #ffffff; background: rgba(255,255,255,0.08); }
+        .nav-link.active { background: #2563eb; color: white; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4); }
+
+        .btn { 
+            padding: 0.625rem 1.25rem; 
+            border-radius: 0.5rem; 
+            font-size: 0.875rem; 
+            cursor: pointer; 
+            transition: all 0.2s; 
+            border: none; 
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-primary:hover { background: #2563eb; transform: translateY(-1px); }
+        .btn-secondary { background: #475569; color: #f1f5f9; border: 1px solid #64748b; }
+        .btn-secondary:hover { background: #64748b; }
+
+        input, select { 
+            background: #1e293b; 
+            border: 1px solid #475569; 
+            color: #f1f5f9; 
+            border-radius: 0.5rem; 
+            padding: 0.5rem 0.875rem;
+            font-size: 0.875rem;
+            transition: all 0.2s;
+        }
+        input:focus, select:focus { border-color: #3b82f6; outline: none; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5); }
+        .btn:focus-visible, a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible { outline: none; box-shadow: 0 0 0 2px #3b82f6; }
+
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; }
+        .bg-up { background-color: #22c55e; box-shadow: 0 0 8px #22c55e; }
+        .bg-down { background-color: #ef4444; box-shadow: 0 0 8px #ef4444; }
+
+        /* Modal / Sidebar for details */
+        #details_panel {
+            position: fixed;
+            right: -520px;
+            top: 0;
+            width: 100%;
+            max-width: 500px;
+            height: 100vh;
+            background: #3f4e65;
+            border-left: 1px solid #64748b;
+            z-index: 1000;
+            transition: right 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            padding: 2.5rem;
+            overflow-y: auto;
+            box-shadow: -12px 0 30px rgba(0,0,0,0.4);
+        }
+        #details_panel.open { right: 0; }
+        .close-btn { position: absolute; top: 1.5rem; right: 1.5rem; cursor: pointer; color: #cbd5e1; }
+        .close-btn:hover { color: white; }
+
+        /* Mobile nav drawer */
+        #mobile_nav_overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15,23,42,0.75);
+            backdrop-filter: blur(4px);
+            z-index: 900;
+        }
+        #mobile_nav_overlay.open { display: block; }
+        #mobile_nav_drawer {
+            position: fixed;
+            top: 0;
+            left: -320px;
+            width: 320px;
+            height: 100vh;
+            background: #3f4e65;
+            border-right: 1px solid #64748b;
+            z-index: 950;
+            transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        #mobile_nav_drawer.open { left: 0; }
+        #mobile_nav_drawer .nav-link { font-size: 1rem; padding: 1rem 1.25rem; }
+    </style>
+    <script>
+        const socket = io();
+
+        function escapeHtml(text) {
+            if (text === null || text === undefined) return '';
+            const div = document.createElement('div');
+            div.textContent = String(text);
+            return div.innerHTML;
+        }
+    </script>
+    
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<style>
+    .device-row {
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    .device-row:hover {
+        background: #334155;
+    }
+    .device-row.active {
+        background: rgba(59,130,246,0.1);
+        border-color: #3b82f6;
+    }
+    .stat-card {
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 1rem;
+        padding: 1.25rem;
+        text-align: center;
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+    }
+</style>
+
+</head>
+<body>
+    <nav class="sticky top-0 z-50 px-6 py-3 flex items-center justify-between border-b border-surface-700" style="background: rgba(51, 65, 85, 0.9); backdrop-filter: blur(12px);">
+        <div class="flex items-center gap-4">
+            <div class="p-2 bg-accent rounded-xl shadow-lg shadow-accent/20">
+                <i class="fas fa-network-wired text-white text-base"></i>
+            </div>
+            <span class="text-base font-bold tracking-tight text-white">SNMP<span class="text-blue-300">MASTER</span></span>
+        </div>
+        <div class="hidden md:flex items-center space-x-2">
+            <a href="/" class="nav-link ">
+                <i class="fas fa-chart-line"></i> BANDWIDTH
+            </a>
+            <a href="/topology" class="nav-link ">
+                <i class="fas fa-project-diagram"></i> Topology
+            </a>
+            <a href="/troubleshooting" class="nav-link ">
+                <i class="fas fa-shield-alt"></i> Troubleshooting
+            </a>
+            <a href="/cpu" class="nav-link active">
+                <i class="fas fa-microchip"></i> CPU
+            </a>
+            <a href="/memory" class="nav-link "><i class="fas fa-memory"></i> Memory</a>
+            <a href="/devices" class="nav-link "><i class="fas fa-edit"></i> Add/Remove Device</a>
+            <a href="/config-history" class="nav-link "><i class="fas fa-history"></i> Configs</a>
+        </div>
+        <div class="flex items-center gap-4">
+            <button id="mobile_menu_btn" class="md:hidden p-2 text-slate-300 hover:text-white" aria-label="Open navigation menu" onclick="toggleMobileNav()">
+                <i class="fas fa-bars text-xl"></i>
+            </button>
+            <div id="ws_status" class="flex items-center gap-2 text-xs font-semibold text-slate-100 bg-surface-700 px-4 py-1.5 rounded-full border border-surface-600">
+                <span class="w-2.5 h-2.5 rounded-full bg-yellow-500 shadow-[0_0_8px_#eab308]"></span> Connecting
+            </div>
+        </div>
+    </nav>
+
+    <div id="mobile_nav_overlay" onclick="toggleMobileNav()"></div>
+    <div id="mobile_nav_drawer">
+        <div class="flex items-center justify-between mb-8">
+            <span class="text-lg font-bold text-white">Menu</span>
+            <button onclick="toggleMobileNav()" aria-label="Close navigation menu" class="text-slate-300 hover:text-white text-3xl">&times;</button>
+        </div>
+        <a href="/dashboard/" class="nav-link "><i class="fas fa-chart-line"></i> BANDWIDTH</a>
+        <a href="/topology" class="nav-link "><i class="fas fa-project-diagram"></i> Topology</a>
+        <a href="/troubleshooting" class="nav-link "><i class="fas fa-shield-alt"></i> Troubleshooting</a>
+        <a href="/cpu" class="nav-link active"><i class="fas fa-microchip"></i> CPU</a>
+        <a href="/memory" class="nav-link "><i class="fas fa-memory"></i> Memory</a>
+        <a href="/devices" class="nav-link "><i class="fas fa-edit"></i> Add/Remove Device</a>
+        <a href="/config-history" class="nav-link "><i class="fas fa-history"></i> Configs</a>
+    </div>
+
+    <main class="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-4 min-h-screen">
+        
+<div class="px-6 py-4 mb-6 bg-surface-800 rounded-2xl border border-surface-700 shadow-xl">
+    <div class="flex flex-wrap items-center justify-between gap-6">
+        <div class="flex items-center gap-4">
+            <div class="p-2 bg-accent/10 rounded-xl">
+                <i class="fas fa-microchip text-accent text-base"></i>
+            </div>
+            <div>
+                <h2 class="text-sm font-bold text-white uppercase tracking-widest">CPU <span class="text-blue-300">Intelligence</span></h2>
+                <p class="text-[10px] text-slate-400 uppercase font-bold tracking-widest mt-0.5">Enterprise Processor Load & Telemetry Analytics</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-4">
+            <select id="device_type_filter" aria-label="Filter devices by type"
+                    class="bg-surface-900 border border-surface-700 rounded-xl px-4 py-2 text-sm text-white focus:ring-2 focus:ring-accent/40 focus:border-accent transition-all">
+                <option value="cisco">Cisco Switches</option>
+                <option value="all">All Devices</option>
+                <option value="esxi">ESXi Only</option>
+                <option value="vcsa">VCSA Only</option>
+            </select>
+            <select id="time_range_filter" aria-label="Select time range for graphs"
+                    class="bg-surface-900 border border-surface-700 rounded-xl px-4 py-2 text-sm text-white focus:ring-2 focus:ring-accent/40 focus:border-accent transition-all">
+                <option value="1">Last 1 Hour</option>
+                <option value="6">Last 6 Hours</option>
+                <option value="24" selected>Last 24 Hours</option>
+                <option value="168">Last 7 Days</option>
+            </select>
+            <button onclick="exportCSV()" class="btn btn-secondary text-xs uppercase font-bold py-2 px-5">
+                <i class="fas fa-download mr-2 opacity-60"></i> Export Dataset
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-cols-12 gap-6">
+    <div class="col-span-12 lg:col-span-3 bg-surface-800 p-5 rounded-2xl border border-surface-700 shadow-xl">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-xs font-bold text-slate-200 uppercase tracking-widest">Monitored Targets</h3>
+            <span id="device_count_badge" class="px-2 py-0.5 bg-surface-900 border border-surface-700 text-slate-400 text-[9px] font-black rounded-full">0/0</span>
+        </div>
+        <div class="relative mb-4">
+            <i class="fas fa-search absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
+            <input type="text" id="device_search" placeholder="Search hosts..." class="w-full pl-9 bg-surface-900 border border-surface-700 rounded-xl px-3 py-1.5 text-xs text-white focus:ring-2 focus:ring-accent/40" oninput="filterDevices(false)">
+        </div>
+        <div id="device_list" class="space-y-1.5 max-h-[600px] overflow-y-auto pr-1 custom-scrollbar">
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.251" data-hostname="10.160.4.251" data-target-type="esxi" onclick="toggleDevice('10.160.4.251')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.251" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.251</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.251</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-green-500/10 border border-green-500/20 text-green-400">online</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.2" data-hostname="10.160.4.2" data-target-type="cisco" onclick="toggleDevice('10.160.4.2')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.2" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.2</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.2</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-red-500/10 border border-red-500/20 text-red-400">offline</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.252" data-hostname="10.160.4.252" data-target-type="esxi" onclick="toggleDevice('10.160.4.252')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.252" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.252</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.252</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-green-500/10 border border-green-500/20 text-green-400">online</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.40" data-hostname="10.160.4.40" data-target-type="vcsa" onclick="toggleDevice('10.160.4.40')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.40" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.40</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.40</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-green-500/10 border border-green-500/20 text-green-400">online</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.50" data-hostname="10.160.4.50" data-target-type="cisco" onclick="toggleDevice('10.160.4.50')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.50" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.50</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.50</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-red-500/10 border border-red-500/20 text-red-400">offline</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.14" data-hostname="10.160.4.14" data-target-type="vcsa" onclick="toggleDevice('10.160.4.14')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.14" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.14</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.14</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-red-500/10 border border-red-500/20 text-red-400">offline</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.249" data-hostname="10.160.4.249" data-target-type="esxi" onclick="toggleDevice('10.160.4.249')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.249" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.249</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.249</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-green-500/10 border border-green-500/20 text-green-400">online</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.227" data-hostname="10.160.4.227" data-target-type="esxi" onclick="toggleDevice('10.160.4.227')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.227" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.227</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.227</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-green-500/10 border border-green-500/20 text-green-400">online</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.1" data-hostname="10.160.4.1" data-target-type="cisco" onclick="toggleDevice('10.160.4.1')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.1" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.1</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.1</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-red-500/10 border border-red-500/20 text-red-400">offline</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.248" data-hostname="10.160.4.248" data-target-type="esxi" onclick="toggleDevice('10.160.4.248')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.248" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.248</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.248</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-red-500/10 border border-red-500/20 text-red-400">offline</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.45" data-hostname="10.160.4.45" data-target-type="esxi" onclick="toggleDevice('10.160.4.45')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.45" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.45</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.45</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-red-500/10 border border-red-500/20 text-red-400">offline</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.43" data-hostname="10.160.4.43" data-target-type="esxi" onclick="toggleDevice('10.160.4.43')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.43" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.43</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.43</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-red-500/10 border border-red-500/20 text-red-400">offline</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.46" data-hostname="10.160.4.46" data-target-type="esxi" onclick="toggleDevice('10.160.4.46')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.46" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.46</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.46</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-red-500/10 border border-red-500/20 text-red-400">offline</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.42" data-hostname="10.160.4.42" data-target-type="esxi" onclick="toggleDevice('10.160.4.42')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.42" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.42</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.42</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-red-500/10 border border-red-500/20 text-red-400">offline</span>
+            </div>
+            
+            <div class="device-row flex items-center justify-between p-3 rounded-xl border border-surface-700/50 bg-surface-900/40" data-ip="10.160.4.41" data-hostname="10.160.4.41" data-target-type="esxi" onclick="toggleDevice('10.160.4.41')">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="chk_10.160.4.41" class="rounded bg-surface-900 border-surface-700 text-accent focus:ring-accent/40 h-4 w-4 pointer-events-none" onclick="event.stopPropagation()">
+                    <div class="text-left">
+                        <span class="block text-xs font-bold text-white truncate max-w-[140px]">10.160.4.41</span>
+                        <span class="block text-[10px] text-slate-500 font-mono">10.160.4.41</span>
+                    </div>
+                </div>
+                <span class="px-1.5 py-0.5 text-[8px] font-black rounded uppercase bg-red-500/10 border border-red-500/20 text-red-400">offline</span>
+            </div>
+            
+        </div>
+    </div>
+
+    <div class="col-span-12 lg:col-span-9 space-y-6">
+        <div class="bg-surface-800 p-6 rounded-2xl border border-surface-700 shadow-xl">
+            <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
+                <div id="focused_device_title" class="text-xs font-bold text-accent uppercase tracking-widest"></div>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
+                <div class="stat-card">
+                    <div id="stat_current" class="text-2xl font-black text-slate-400">--</div>
+                    <div class="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">Current</div>
+                </div>
+                <div class="stat-card">
+                    <div id="stat_avg" class="text-2xl font-black text-white">--</div>
+                    <div class="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">Average</div>
+                </div>
+                <div class="stat-card">
+                    <div id="stat_max" class="text-2xl font-black text-white">--</div>
+                    <div class="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">Peak Load</div>
+                </div>
+                <div class="stat-card">
+                    <div id="stat_min" class="text-2xl font-black text-white">--</div>
+                    <div class="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">Floor Load</div>
+                </div>
+                <div class="stat-card">
+                    <div id="stat_p95" class="text-2xl font-black text-white">--</div>
+                    <div class="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">95th Percentile</div>
+                </div>
+                <div class="stat-card">
+                    <div id="stat_stddev" class="text-2xl font-black text-white">--</div>
+                    <div class="text-[9px] text-slate-500 uppercase font-black tracking-widest mt-1">Std Deviation</div>
+                </div>
+            </div>
+
+            <div class="bg-surface-900 rounded-2xl border border-surface-700 p-6 shadow-inner" style="height: 400px;">
+                <canvas id="cpu_chart"></canvas>
+            </div>
+        </div>
+
+        <div class="bg-surface-800 p-6 rounded-2xl border border-surface-700 shadow-xl">
+            <div class="flex items-center gap-3 mb-4">
+                <i class="fas fa-bell text-red-400 text-xs"></i>
+                <h3 class="text-xs font-bold text-slate-200 uppercase tracking-widest">Anomaly & Storm Logs</h3>
+            </div>
+            <div id="alert_list" class="space-y-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+                <p class="text-sm text-slate-300 italic">Select a target device to scan anomaly logs.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let chart = null;
+let selectedDevices = [];
+const allDevices = {"10.160.4.1": {"cpu": 0, "hostname": null, "interfaces": [{"admin": "up", "alias": "", "descr": "GigabitEthernet0/0", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "1", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Null0", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "3", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 10000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "4", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1002", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "5", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1004", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "6", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1005", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "7", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1003", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "8", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "To_Switch_10.160.4.50", "descr": "GigabitEthernet1/0/1", "hostname": "10.160.4.1", "in_mbps": 0.2, "index": "9", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.15, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.02}, {"admin": "up", "alias": "To_Switch_10.160.4.50", "descr": "GigabitEthernet1/0/2", "hostname": "10.160.4.1", "in_mbps": 0.88, "index": "10", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.13, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.09}, {"admin": "up", "alias": "To_Switch_10.160.4.2", "descr": "GigabitEthernet1/0/3", "hostname": "10.160.4.1", "in_mbps": 0.03, "index": "11", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.03, "speed": 100, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.03}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/4", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "12", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/5", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "13", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "Dedicated_ESXi4_VSwitch_10.160.4.249", "descr": "GigabitEthernet1/0/6", "hostname": "10.160.4.1", "in_mbps": 0.01, "index": "14", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.06, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi4_Storage_Path1", "descr": "GigabitEthernet1/0/7", "hostname": "10.160.4.1", "in_mbps": 0.01, "index": "15", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.02, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi3_Storage_Path1", "descr": "GigabitEthernet1/0/8", "hostname": "10.160.4.1", "in_mbps": 0.04, "index": "16", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.01, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/9", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "17", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi2_Distributed_VSwitch", "descr": "GigabitEthernet1/0/10", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "18", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.05, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/11", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "19", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi2_Storage_Path2", "descr": "GigabitEthernet1/0/12", "hostname": "10.160.4.1", "in_mbps": 0.04, "index": "20", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.01, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/13", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "21", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "Dedicated_ESXi2_VSwitch_10.160.4.251", "descr": "GigabitEthernet1/0/14", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "22", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.06, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi2_Storage_Path1", "descr": "GigabitEthernet1/0/15", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "23", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi5_Distributed_VSwitch", "descr": "GigabitEthernet1/0/16", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "24", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.05, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "Dedicated_ESXi5_VSwitch_Mgmt", "descr": "GigabitEthernet1/0/17", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "25", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.06, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi5_Storage_Path1", "descr": "GigabitEthernet1/0/18", "hostname": "10.160.4.1", "in_mbps": 1.54, "index": "26", "ip": "10.160.4.1", "oper": "up", "out_mbps": 167.69, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 16.77}, {"admin": "up", "alias": "Dedicated_ESXi6_VSwitch_10.160.4.227", "descr": "GigabitEthernet1/0/19", "hostname": "10.160.4.1", "in_mbps": 0.01, "index": "27", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.06, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/20", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "28", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "Dor_Perlman_Access_Point", "descr": "GigabitEthernet1/0/21", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "29", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi6_Storage_Path2", "descr": "GigabitEthernet1/0/22", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "30", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/23", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "31", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/24", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "32", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/25", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "33", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/26", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "34", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi3_-_Distributed_VSwitch", "descr": "GigabitEthernet1/0/27", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "35", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.06, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "Dell_ME4012_ISCSI_10.160.4.234", "descr": "GigabitEthernet1/0/28", "hostname": "10.160.4.1", "in_mbps": 98.39, "index": "36", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.59, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 9.84}, {"admin": "up", "alias": "Dell_ME4012_-_Management", "descr": "GigabitEthernet1/0/29", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "37", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "Dell_ME4012_ISCSI_10.160.4.226", "descr": "GigabitEthernet1/0/30", "hostname": "10.160.4.1", "in_mbps": 0.08, "index": "38", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.08, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "Dell_ME5024_-_Management", "descr": "GigabitEthernet1/0/31", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "39", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "Dell_ME5024_-_Management", "descr": "GigabitEthernet1/0/32", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "40", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi7_-_Distributed_VSwitch", "descr": "GigabitEthernet1/0/33", "hostname": "10.160.4.1", "in_mbps": 0.53, "index": "41", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.16, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.05}, {"admin": "up", "alias": "ESXi6_Storage_Path1", "descr": "GigabitEthernet1/0/34", "hostname": "10.160.4.1", "in_mbps": 0.04, "index": "42", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.01, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi4_Distributed_VSwitch", "descr": "GigabitEthernet1/0/35", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "43", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.07, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi6_-_Distributed_VSwitch", "descr": "GigabitEthernet1/0/36", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "44", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.07, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi4_Storage_Path2", "descr": "GigabitEthernet1/0/37", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "45", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi7_Storage_Trunk", "descr": "GigabitEthernet1/0/38", "hostname": "10.160.4.1", "in_mbps": 18.24, "index": "46", "ip": "10.160.4.1", "oper": "up", "out_mbps": 1.42, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 1.82}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/39", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "47", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi5_Storage_Path2", "descr": "GigabitEthernet1/0/40", "hostname": "10.160.4.1", "in_mbps": 0.57, "index": "48", "ip": "10.160.4.1", "oper": "up", "out_mbps": 90.82, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 9.08}, {"admin": "up", "alias": "ESXi7_Storage_Path2", "descr": "GigabitEthernet1/0/41", "hostname": "10.160.4.1", "in_mbps": 20.03, "index": "49", "ip": "10.160.4.1", "oper": "up", "out_mbps": 1.63, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 2.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/42", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "50", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "FortiGate_100D", "descr": "GigabitEthernet1/0/43", "hostname": "10.160.4.1", "in_mbps": 0.03, "index": "51", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.44, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.04}, {"admin": "up", "alias": "FortiGate_100D", "descr": "GigabitEthernet1/0/44", "hostname": "10.160.4.1", "in_mbps": 0.07, "index": "52", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.41, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.04}, {"admin": "up", "alias": "Dedicated_ESXi3_VSwitch_10.160.4.252", "descr": "GigabitEthernet1/0/45", "hostname": "10.160.4.1", "in_mbps": 0.01, "index": "53", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.07, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "Dedicated_ESXi7_VSwitch_10.160.4.228", "descr": "GigabitEthernet1/0/46", "hostname": "10.160.4.1", "in_mbps": 0.13, "index": "54", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.11, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/47", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "55", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "AsafK_SW_Do_Not_Shut! ( 10.160.4.3 )", "descr": "GigabitEthernet1/0/48", "hostname": "10.160.4.1", "in_mbps": 0.02, "index": "56", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.05, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "Storage_ME5024_A0_-_10.160.100.10", "descr": "TenGigabitEthernet1/1/1", "hostname": "10.160.4.1", "in_mbps": 94.13, "index": "57", "ip": "10.160.4.1", "oper": "up", "out_mbps": 22.87, "speed": 10000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.94}, {"admin": "up", "alias": "Storage_ME5024_B0_-_10.160.100.11", "descr": "TenGigabitEthernet1/1/2", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "58", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 10000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "Storage_ME5024_A1_-_10.160.101.10", "descr": "TenGigabitEthernet1/1/3", "hostname": "10.160.4.1", "in_mbps": 92.11, "index": "59", "ip": "10.160.4.1", "oper": "up", "out_mbps": 19.42, "speed": 10000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.92}, {"admin": "up", "alias": "Storage_ME5024_B1_-_10.160.101.11", "descr": "TenGigabitEthernet1/1/4", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "60", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 10000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "StackPort1", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "61", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 80000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "down", "alias": "", "descr": "StackSub-St1-1", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "62", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 40000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "down", "alias": "", "descr": "StackSub-St1-2", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "63", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 40000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "Default_Native_Vlan", "descr": "Vlan1", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "64", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "FortiGate_100D_PortChannel", "descr": "Port-channel1", "hostname": "10.160.4.1", "in_mbps": 0.1, "index": "65", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.84, "speed": 2000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.04}, {"admin": "up", "alias": "Dedicated_ESXi2_VSwitch_10.160.4.251", "descr": "Port-channel4", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "67", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.06, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "", "descr": "Vlan4", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "71", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.8, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.08}, {"admin": "up", "alias": "VLAN_96_-_Storage_Vlan", "descr": "Vlan96", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "72", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "VLAN_97_-_Out-Of-Band_Vlan", "descr": "Vlan97", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "73", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "VLAN_210", "descr": "Vlan210", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "74", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "VLAN_211", "descr": "Vlan211", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "75", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "VLAN_212", "descr": "Vlan212", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "76", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Vlan772", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "77", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Vlan776", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "78", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Vlan777", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "79", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Vlan901", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "80", "ip": "10.160.4.1", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Vlan1516", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "81", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Vlan1517", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "82", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1019", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "83", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1020", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "84", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1021", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "85", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1051", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "86", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1101", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "87", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1102", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "88", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1103", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "89", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1104", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "90", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1113", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "91", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1114", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "92", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1123", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "93", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1124", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "94", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1139", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "95", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1211", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "96", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1516", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "97", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1517", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "98", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1721", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "99", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1799", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "100", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1800", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "101", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1801", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "102", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1802", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "103", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 2001", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "104", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 2030", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "105", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 2222", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "106", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 3241", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "107", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1111", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "108", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1518", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "109", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1519", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "110", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 2031", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "111", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 2032", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "112", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 4", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "113", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 5", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "114", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 10", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "115", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 19", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "116", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 22", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "117", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 26", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "118", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 27", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "119", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 29", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "120", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 35", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "121", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 41", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "122", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 55", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "123", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 60", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "124", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 61", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "125", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 62", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "126", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 63", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "127", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 64", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "128", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 65", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "129", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 66", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "130", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 67", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "131", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 68", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "132", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 70", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "133", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 71", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "134", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 72", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "135", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 73", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "136", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 74", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "137", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 75", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "138", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 76", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "139", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 77", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "140", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 84", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "141", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 88", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "142", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 97", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "143", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 98", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "144", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 100", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "145", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 101", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "146", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 108", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "147", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 109", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "148", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 111", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "149", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 112", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "150", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 113", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "151", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 137", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "152", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 138", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "153", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 139", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "154", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 149", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "155", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 165", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "156", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 176", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "157", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 190", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "158", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 191", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "159", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 192", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "160", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 210", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "161", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 211", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "162", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 212", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "163", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 213", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "164", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 214", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "165", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 215", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "166", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 222", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "167", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 223", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "168", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 250", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "169", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 251", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "170", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 252", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "171", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 300", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "172", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 301", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "173", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 302", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "174", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 303", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "175", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 310", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "176", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 323", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "177", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 324", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "178", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 325", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "179", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 326", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "180", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 327", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "181", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 500", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "182", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 501", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "183", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 502", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "184", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 503", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "185", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 504", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "186", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 505", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "187", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 535", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "188", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 555", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "189", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 556", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "190", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 557", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "191", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 558", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "192", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 559", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "193", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 700", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "194", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 703", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "195", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 704", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "196", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 739", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "197", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 750", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "198", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 776", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "199", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 777", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "200", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 790", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "201", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 791", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "202", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 792", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "203", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 793", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "204", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 810", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "205", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 910", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "206", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1000", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "207", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 2", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "208", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 6", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "209", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 8", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "210", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 23", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "211", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 24", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "212", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 44", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "213", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 50", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "214", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 58", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "215", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 59", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "216", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 90", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "217", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 91", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "218", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 92", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "219", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 121", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "220", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 151", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "221", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 152", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "222", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 162", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "223", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 304", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "224", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 667", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "225", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 668", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "226", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 669", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "227", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 778", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "228", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 779", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "229", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 800", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "230", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 850", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "231", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 851", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "232", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 900", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "233", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 999", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "234", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1001", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "235", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 20", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "236", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "Vlan20", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "237", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 536", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "238", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 537", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "239", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 11", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "240", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 12", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "241", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 13", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "242", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 15", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "243", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 16", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "244", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 17", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "245", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 18", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "246", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 21", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "247", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 25", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "248", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 42", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "249", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 57", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "250", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 80", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "251", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 81", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "252", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 83", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "253", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 85", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "254", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 86", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "255", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 87", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "256", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 96", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "257", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 102", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "258", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 103", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "259", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 106", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "260", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 118", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "261", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 120", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "262", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 123", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "263", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 130", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "264", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 131", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "265", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 132", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "266", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 136", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "267", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 150", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "268", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 154", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "269", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 155", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "270", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 159", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "271", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 160", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "272", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 161", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "273", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 217", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "274", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 253", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "275", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 289", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "276", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 298", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "277", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 400", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "278", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 401", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "279", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 402", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "280", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 403", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "281", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 404", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "282", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 663", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "283", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 664", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "284", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 701", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "285", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 788", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "286", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1023", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "287", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 1024", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "288", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 320", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "289", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 821", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "290", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 921", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "291", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 721", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "292", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 538", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "293", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 54", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "295", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 751", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "296", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "unrouted VLAN 51", "hostname": "10.160.4.1", "in_mbps": 0.0, "index": "297", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "To_Switch_10.160.4.50", "descr": "Port-channel2", "hostname": "10.160.4.1", "in_mbps": 1.06, "index": "298", "ip": "10.160.4.1", "oper": "up", "out_mbps": 0.28, "speed": 2000, "switch_ip": "10.160.4.1", "target_type": "cisco", "util": 0.05}], "ip": "10.160.4.1", "last_seen": "2026-06-19T16:41:53.241998", "status": "offline", "sys_contact": "", "sys_descr": null, "sys_location": "", "sys_name": null, "sys_uptime": null, "target_type": "cisco"}, "10.160.4.14": {"cpu": 0, "hostname": null, "interfaces": [{"admin": "up", "alias": "", "descr": "Device eth0 at 03:00.0 VMware - VMXNET3 Ethernet Controller", "hostname": "10.160.4.14", "in_mbps": 0.0, "index": "2", "ip": "10.160.4.14", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.14", "target_type": "vcsa", "util": 0}], "ip": "10.160.4.14", "last_seen": "2026-06-19T16:41:53.276437", "status": "offline", "sys_contact": "", "sys_descr": null, "sys_location": "", "sys_name": null, "sys_uptime": null, "target_type": "vcsa"}, "10.160.4.2": {"cpu": 0, "hostname": null, "interfaces": [{"admin": "down", "alias": "", "descr": "Vlan1", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "1", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "Trunk_To_Lab", "descr": "Vlan4", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "4", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.01, "speed": 1000, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Vlan250", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "250", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Vlan323", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "323", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "PALO3220", "descr": "Port-channel1", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "5001", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.05, "speed": 200, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.03}, {"admin": "up", "alias": "**Adi_to_FGT100d_rotem**", "descr": "Port-channel2", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "5002", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ariel_to_rotem_fortigate100d", "descr": "Port-channel4", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "5004", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ARIEL-SWTICH-3850-PO5", "descr": "Port-channel5", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "5005", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Port-channel48", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "5048", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.05, "speed": 100, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.05}, {"admin": "up", "alias": "", "descr": "StackPort1", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "5179", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0}, {"admin": "down", "alias": "", "descr": "StackSub-St1-1", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "5180", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0}, {"admin": "down", "alias": "", "descr": "StackSub-St1-2", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "5181", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "To_Switch_10.160.4.1", "descr": "FastEthernet1/0/1", "hostname": "10.160.4.2", "in_mbps": 0.03, "index": "10001", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.04, "speed": 100, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.04}, {"admin": "up", "alias": "**ADI_MGMT_Encyrptor_A_325**", "descr": "FastEthernet1/0/2", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10002", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "**ADI_MGMT_Encyrptor_B_325**", "descr": "FastEthernet1/0/3", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10003", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "**ADI_lan_Encyrptor_B_323**", "descr": "FastEthernet1/0/4", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10004", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "**ADI_ASA_vlan324_uplink**", "descr": "FastEthernet1/0/5", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10005", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "PALO3220_LAN_1", "descr": "FastEthernet1/0/6", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10006", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.04, "speed": 100, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.04}, {"admin": "up", "alias": "PALO3220_LAN_2", "descr": "FastEthernet1/0/7", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10007", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.01, "speed": 100, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "RONI_To_SW_TacacsLAB", "descr": "FastEthernet1/0/8", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10008", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "**Adi_to_FGT100d_rotem**", "descr": "FastEthernet1/0/9", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10009", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "LOLA_SO_GOOD", "descr": "FastEthernet1/0/10", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10010", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "FastEthernet1/0/11", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10011", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ARIEL-SWITCH-3850 ", "descr": "FastEthernet1/0/12", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10012", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "***SaarD-TO_ASA-ADI***", "descr": "FastEthernet1/0/13", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10013", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "***SaarD-TO_ASA-ADI***", "descr": "FastEthernet1/0/14", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10014", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.05, "speed": 100, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.05}, {"admin": "up", "alias": "**ADI-ASA-MGMT**", "descr": "FastEthernet1/0/15", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10015", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "**ADI_ASA_vlan325_uplink**", "descr": "FastEthernet1/0/16", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10016", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "PALO3220_MGMT_VLAN_4", "descr": "FastEthernet1/0/17", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10017", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ARIEL-SWITCH-3850", "descr": "FastEthernet1/0/18", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10018", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "Rotem_WAN2_Forti100D", "descr": "FastEthernet1/0/19", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10019", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "FastEthernet1/0/20", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10020", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ariel_to_rotem_fortigate100d", "descr": "FastEthernet1/0/21", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10021", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "Josh-SW", "descr": "FastEthernet1/0/22", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10022", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "FastEthernet1/0/23", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10023", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "Shira-Firepower-MGMT", "descr": "FastEthernet1/0/24", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10024", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/1", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10101", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/2", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "10102", "ip": "10.160.4.2", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Null0", "hostname": "10.160.4.2", "in_mbps": 0.0, "index": "14501", "ip": "10.160.4.2", "oper": "up", "out_mbps": 0.0, "speed": 10000, "switch_ip": "10.160.4.2", "target_type": "cisco", "util": 0.0}], "ip": "10.160.4.2", "last_seen": "2026-06-19T16:41:53.297248", "status": "offline", "sys_contact": "", "sys_descr": null, "sys_location": "", "sys_name": null, "sys_uptime": null, "target_type": "cisco"}, "10.160.4.227": {"cpu": 0, "hostname": "10.160.4.227", "interfaces": [{"admin": "up", "alias": "24:00.0", "descr": "Device vmnic0 at 24:00.0 ntg3", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "1", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "24:00.1", "descr": "Device vmnic1 at 24:00.1 ntg3", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "2", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "25:00.0", "descr": "Device vmnic2 at 25:00.0 ntg3", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "3", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "25:00.1", "descr": "Device vmnic3 at 25:00.1 ntg3", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "4", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "Storage_Switch", "descr": "Link Aggregation Storage_Network on switch: Storage_Switch, load balancing algorithm: source port id hash", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "5", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "DvsPortset-0", "descr": "Distributed Virtual VMware switch: DvsPortset-0", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "6", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "Dedicated_ESXi6_VSwitch", "descr": "Traditional Virtual VMware switch: Dedicated_ESXi6_VSwitch", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "7", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "Storage_Switch", "descr": "Traditional Virtual VMware switch: Storage_Switch", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "8", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vSwitch0", "descr": "Traditional Virtual VMware switch: vSwitch0", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "9", "ip": "10.160.4.227", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk0-Dedicated_ESXi6_VSwitch", "descr": "Virtual interface: vmk0 on vswitch Dedicated_ESXi6_VSwitch portgroup: Management_Network", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "10", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk1-Dedicated_ESXi6_VSwitch", "descr": "Virtual interface: vmk1 on vswitch Dedicated_ESXi6_VSwitch portgroup: VMotion_Network", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "11", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk2-Storage_Switch", "descr": "Virtual interface: vmk2 on vswitch Storage_Switch portgroup: Storage_Network", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "12", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk3-Storage_Switch", "descr": "Virtual interface: vmk3 on vswitch Storage_Switch portgroup: ME5024_iSCSI_100", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "13", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk4-Storage_Switch", "descr": "Virtual interface: vmk4 on vswitch Storage_Switch portgroup: ME5024_iSCSI_101", "hostname": "10.160.4.227", "in_mbps": 0.0, "index": "14", "ip": "10.160.4.227", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.227", "target_type": "esxi", "util": 0}], "ip": "10.160.4.227", "last_seen": "2026-06-19T16:41:57.304392", "status": "online", "sys_contact": "", "sys_descr": "VMware ESXi 7.0.3 build-20328353 VMware, Inc. x86_64", "sys_location": "", "sys_name": "10.160.4.227", "sys_uptime": null, "target_type": "esxi"}, "10.160.4.248": {"cpu": 0, "hostname": null, "interfaces": [{"admin": "up", "alias": "03:00.0", "descr": "Device vmnic0 at 03:00.0 qflge", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "1", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "03:00.1", "descr": "Device vmnic1 at 03:00.1 qflge", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "2", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "04:00.0", "descr": "Device vmnic2 at 04:00.0 qflge", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "3", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "04:00.1", "descr": "Device vmnic3 at 04:00.1 qflge", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "4", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "Storage_Switch", "descr": "Link Aggregation Storage_Network on switch: Storage_Switch, load balancing algorithm: source port id hash", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "5", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "DvsPortset-0", "descr": "Distributed Virtual VMware switch: DvsPortset-0", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "6", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "Storage_Switch", "descr": "Traditional Virtual VMware switch: Storage_Switch", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "7", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vSwitch0", "descr": "Traditional Virtual VMware switch: vSwitch0", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "8", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk0-vSwitch0", "descr": "Virtual interface: vmk0 on vswitch vSwitch0 portgroup: Management_Network", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "9", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk1-Storage_Switch", "descr": "Virtual interface: vmk1 on vswitch Storage_Switch portgroup: Storage_Network", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "10", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk2-vSwitch0", "descr": "Virtual interface: vmk2 on vswitch vSwitch0 portgroup: VMotion_Network", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "11", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk3-Storage_Switch", "descr": "Virtual interface: vmk3 on vswitch Storage_Switch portgroup:  ME5024_iSCSI_100", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "12", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk4-Storage_Switch", "descr": "Virtual interface: vmk4 on vswitch Storage_Switch portgroup:  ME5024_iSCSI_101", "hostname": "10.160.4.248", "in_mbps": 0.0, "index": "13", "ip": "10.160.4.248", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.248", "target_type": "esxi", "util": 0}], "ip": "10.160.4.248", "last_seen": "2026-06-19T16:41:53.283132", "status": "offline", "sys_contact": "", "sys_descr": null, "sys_location": "", "sys_name": null, "sys_uptime": null, "target_type": "esxi"}, "10.160.4.249": {"cpu": 0, "hostname": "10.160.4.249", "interfaces": [{"admin": "up", "alias": "01:00.0", "descr": "Device vmnic0 at 01:00.0 ntg3", "hostname": "10.160.4.249", "in_mbps": 0.13, "index": "1", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.03, "speed": 1000, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0.01}, {"admin": "up", "alias": "01:00.1", "descr": "Device vmnic1 at 01:00.1 ntg3", "hostname": "10.160.4.249", "in_mbps": 0.04, "index": "2", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.09, "speed": 1000, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0.01}, {"admin": "up", "alias": "02:00.0", "descr": "Device vmnic2 at 02:00.0 ntg3", "hostname": "10.160.4.249", "in_mbps": 0.11, "index": "3", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0.01}, {"admin": "up", "alias": "02:00.1", "descr": "Device vmnic3 at 02:00.1 ntg3", "hostname": "10.160.4.249", "in_mbps": 0.01, "index": "4", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "00:00.0", "descr": "Device vusb0 at 00:00.0 cdce", "hostname": "10.160.4.249", "in_mbps": 0.0, "index": "5", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "00:00.0", "descr": "Device vusb0 at 00:00.0 cdce", "hostname": "10.160.4.249", "in_mbps": 0.0, "index": "6", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "vSwitch1", "descr": "Link Aggregation Storage_Network on switch: vSwitch1, load balancing algorithm: source port id hash", "hostname": "10.160.4.249", "in_mbps": 0.04, "index": "7", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.09, "speed": 1000, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0.01}, {"admin": "up", "alias": "DvsPortset-0", "descr": "Distributed Virtual VMware switch: DvsPortset-0", "hostname": "10.160.4.249", "in_mbps": 0.0, "index": "8", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "IdanS_Lab", "descr": "Traditional Virtual VMware switch: IdanS_Lab", "hostname": "10.160.4.249", "in_mbps": 0.0, "index": "9", "ip": "10.160.4.249", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vSwitch0", "descr": "Traditional Virtual VMware switch: vSwitch0", "hostname": "10.160.4.249", "in_mbps": 0.0, "index": "10", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vSwitch1", "descr": "Traditional Virtual VMware switch: vSwitch1", "hostname": "10.160.4.249", "in_mbps": 0.0, "index": "11", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vSwitch3", "descr": "Traditional Virtual VMware switch: vSwitch3", "hostname": "10.160.4.249", "in_mbps": 0.0, "index": "12", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vSwitch4", "descr": "Distributed Virtual VMware switch: vSwitch4", "hostname": "10.160.4.249", "in_mbps": 0.0, "index": "13", "ip": "10.160.4.249", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vSwitchiDRACvusb", "descr": "Traditional Virtual VMware switch: vSwitchiDRACvusb", "hostname": "10.160.4.249", "in_mbps": 0.0, "index": "14", "ip": "10.160.4.249", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk0-vSwitch0", "descr": "Virtual interface: vmk0 on vswitch vSwitch0 portgroup: Management_Network", "hostname": "10.160.4.249", "in_mbps": 0.01, "index": "15", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.03, "speed": 0, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk1-vSwitch1", "descr": "Virtual interface: vmk1 on vswitch vSwitch1 portgroup: Storage_Network", "hostname": "10.160.4.249", "in_mbps": 0.03, "index": "16", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.09, "speed": 0, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk2-vSwitch0", "descr": "Virtual interface: vmk2 on vswitch vSwitch0 portgroup: VMotion_Network", "hostname": "10.160.4.249", "in_mbps": 0.0, "index": "17", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk3-vSwitch1", "descr": "Virtual interface: vmk3 on vswitch vSwitch1 portgroup: ME5024_iSCSI_100", "hostname": "10.160.4.249", "in_mbps": 0.0, "index": "18", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk4-vSwitch1", "descr": "Virtual interface: vmk4 on vswitch vSwitch1 portgroup: ME5024_iSCSI_101", "hostname": "10.160.4.249", "in_mbps": 0.0, "index": "19", "ip": "10.160.4.249", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.249", "target_type": "esxi", "util": 0}], "ip": "10.160.4.249", "last_seen": "2026-06-19T16:41:57.313170", "status": "online", "sys_contact": "", "sys_descr": "VMware ESXi 7.0.3 build-20328353 VMware, Inc. x86_64", "sys_location": "", "sys_name": "10.160.4.249", "sys_uptime": null, "target_type": "esxi"}, "10.160.4.251": {"cpu": 0, "hostname": "10.160.4.251", "interfaces": [{"admin": "up", "alias": "03:00.0", "descr": "Device vmnic0 at 03:00.0 qflge", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "1", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "03:00.1", "descr": "Device vmnic1 at 03:00.1 qflge", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "2", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "04:00.0", "descr": "Device vmnic2 at 04:00.0 qflge", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "3", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "04:00.1", "descr": "Device vmnic3 at 04:00.1 qflge", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "4", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "00:00.0", "descr": "Device vusb0 at 00:00.0 cdce", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "5", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "Storage_Switch", "descr": "Link Aggregation Storage_Network on switch: Storage_Switch, load balancing algorithm: source port id hash", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "6", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "DvsPortset-0", "descr": "Distributed Virtual VMware switch: DvsPortset-0", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "7", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "Storage_Switch", "descr": "Traditional Virtual VMware switch: Storage_Switch", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "8", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "Training_Switch", "descr": "Distributed Virtual VMware switch: Training_Switch", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "9", "ip": "10.160.4.251", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "Yuval_Lab", "descr": "Distributed Virtual VMware switch: Yuval_Lab", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "10", "ip": "10.160.4.251", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vSwitch0", "descr": "Traditional Virtual VMware switch: vSwitch0", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "11", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk0-vSwitch0", "descr": "Virtual interface: vmk0 on vswitch vSwitch0 portgroup: Management_Network", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "12", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk1-Storage_Switch", "descr": "Virtual interface: vmk1 on vswitch Storage_Switch portgroup: Storage_Network", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "13", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk2-vSwitch0", "descr": "Virtual interface: vmk2 on vswitch vSwitch0 portgroup: VMotion_Network", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "14", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk3-Storage_Switch", "descr": "Virtual interface: vmk3 on vswitch Storage_Switch portgroup: ME5024_iSCSI_100", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "15", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk4-Storage_Switch", "descr": "Virtual interface: vmk4 on vswitch Storage_Switch portgroup: ME5024_iSCSI_101", "hostname": "10.160.4.251", "in_mbps": 0.0, "index": "16", "ip": "10.160.4.251", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.251", "target_type": "esxi", "util": 0}], "ip": "10.160.4.251", "last_seen": "2026-06-19T16:41:57.297990", "status": "online", "sys_contact": "", "sys_descr": "VMware ESXi 7.0.3 build-20328353 VMware, Inc. x86_64", "sys_location": "", "sys_name": "10.160.4.251", "sys_uptime": null, "target_type": "esxi"}, "10.160.4.252": {"cpu": 0, "hostname": "10.160.4.252", "interfaces": [{"admin": "up", "alias": "01:00.0", "descr": "Device vmnic0 at 01:00.0 qflge", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "1", "ip": "10.160.4.252", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "01:00.1", "descr": "Device vmnic1 at 01:00.1 qflge", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "2", "ip": "10.160.4.252", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "02:00.0", "descr": "Device vmnic2 at 02:00.0 qflge", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "3", "ip": "10.160.4.252", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "02:00.1", "descr": "Device vmnic3 at 02:00.1 qflge", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "4", "ip": "10.160.4.252", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0.0}, {"admin": "up", "alias": "vSwitch0", "descr": "Link Aggregation VMotion_Network on switch: vSwitch0, load balancing algorithm: source ip address hash", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "5", "ip": "10.160.4.252", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vSwitch0", "descr": "Link Aggregation Management_Network on switch: vSwitch0, load balancing algorithm: source ip address hash", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "6", "ip": "10.160.4.252", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "DvsPortset-0", "descr": "Distributed Virtual VMware switch: DvsPortset-0", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "7", "ip": "10.160.4.252", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "Storage_Switch", "descr": "Traditional Virtual VMware switch: Storage_Switch", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "8", "ip": "10.160.4.252", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vSwitch0", "descr": "Traditional Virtual VMware switch: vSwitch0", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "9", "ip": "10.160.4.252", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vSwitch1", "descr": "Traditional Virtual VMware switch: vSwitch1", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "10", "ip": "10.160.4.252", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vSwitch2", "descr": "Traditional Virtual VMware switch: vSwitch2", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "11", "ip": "10.160.4.252", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk0-vSwitch0", "descr": "Virtual interface: vmk0 on vswitch vSwitch0 portgroup: Management_Network", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "12", "ip": "10.160.4.252", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk1-vSwitch0", "descr": "Virtual interface: vmk1 on vswitch vSwitch0 portgroup: VMotion_Network", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "13", "ip": "10.160.4.252", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk2-Storage_Switch", "descr": "Virtual interface: vmk2 on vswitch Storage_Switch portgroup: Storage_Network", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "14", "ip": "10.160.4.252", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk3-Storage_Switch", "descr": "Virtual interface: vmk3 on vswitch Storage_Switch portgroup: ME5024_iSCSI_100", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "15", "ip": "10.160.4.252", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}, {"admin": "up", "alias": "vmk4-Storage_Switch", "descr": "Virtual interface: vmk4 on vswitch Storage_Switch portgroup: ME5024_iSCSI_101", "hostname": "10.160.4.252", "in_mbps": 0.0, "index": "16", "ip": "10.160.4.252", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.252", "target_type": "esxi", "util": 0}], "ip": "10.160.4.252", "last_seen": "2026-06-19T16:41:57.286155", "status": "online", "sys_contact": "", "sys_descr": "VMware ESXi 7.0.3 build-20328353 VMware, Inc. x86_64", "sys_location": "", "sys_name": "10.160.4.252", "sys_uptime": null, "target_type": "esxi"}, "10.160.4.40": {"cpu": 0, "hostname": "10.160.4.40", "interfaces": [{"admin": "up", "alias": "", "descr": "Device eth0 at 03:00.0 VMware - VMXNET3 Ethernet Controller", "hostname": "10.160.4.40", "in_mbps": 0.0, "index": "2", "ip": "10.160.4.40", "oper": "up", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.40", "target_type": "vcsa", "util": 0}], "ip": "10.160.4.40", "last_seen": "2026-06-19T16:41:57.273734", "status": "online", "sys_contact": "", "sys_descr": "VMware vCenter Server 8.0.2.00100 embedded build 22617221 VMware, Inc x86_64", "sys_location": "", "sys_name": "10.160.4.40", "sys_uptime": null, "target_type": "vcsa"}, "10.160.4.41": {"cpu": 0, "hostname": null, "interfaces": [], "ip": "10.160.4.41", "last_seen": "2026-06-19T16:41:53.262250", "status": "offline", "sys_contact": "", "sys_descr": null, "sys_location": "", "sys_name": null, "sys_uptime": null, "target_type": "esxi"}, "10.160.4.42": {"cpu": 0, "hostname": null, "interfaces": [], "ip": "10.160.4.42", "last_seen": "2026-06-19T16:41:53.269886", "status": "offline", "sys_contact": "", "sys_descr": null, "sys_location": "", "sys_name": null, "sys_uptime": null, "target_type": "esxi"}, "10.160.4.43": {"cpu": 0, "hostname": null, "interfaces": [], "ip": "10.160.4.43", "last_seen": "2026-06-19T16:41:53.290451", "status": "offline", "sys_contact": "", "sys_descr": null, "sys_location": "", "sys_name": null, "sys_uptime": null, "target_type": "esxi"}, "10.160.4.45": {"cpu": 0, "hostname": null, "interfaces": [], "ip": "10.160.4.45", "last_seen": "2026-06-19T16:41:53.254464", "status": "offline", "sys_contact": "", "sys_descr": null, "sys_location": "", "sys_name": null, "sys_uptime": null, "target_type": "esxi"}, "10.160.4.46": {"cpu": 0, "hostname": null, "interfaces": [], "ip": "10.160.4.46", "last_seen": "2026-06-19T16:41:53.305728", "status": "offline", "sys_contact": "", "sys_descr": null, "sys_location": "", "sys_name": null, "sys_uptime": null, "target_type": "esxi"}, "10.160.4.50": {"cpu": 0, "hostname": null, "interfaces": [{"admin": "down", "alias": "", "descr": "Vlan1", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "1", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Vlan4", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "4", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.01, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Vlan85", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "85", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "VLAN_210", "descr": "Vlan210", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "210", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "VLAN_211", "descr": "Vlan211", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "211", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "VLAN_212", "descr": "Vlan212", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "212", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Vlan778", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "778", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.0, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi44_Dedicated_VSwitch_10.160.4.44", "descr": "Port-channel1", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "5001", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi42_Dedicated_VSwitch_10.160.4.42", "descr": "Port-channel2", "hostname": "10.160.4.50", "in_mbps": 1.84, "index": "5002", "ip": "10.160.4.50", "oper": "up", "out_mbps": 1.71, "speed": 2000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.09}, {"admin": "up", "alias": "ESXi46_Dedicated_VSwitch_10.160.4.46", "descr": "Port-channel3", "hostname": "10.160.4.50", "in_mbps": 0.05, "index": "5003", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.09, "speed": 2000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi43_Dedicated_VSwitch_10.160.4.43", "descr": "Port-channel4", "hostname": "10.160.4.50", "in_mbps": 0.14, "index": "5004", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.1, "speed": 2000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi45_Dedicated_VSwitch_10.160.4.45", "descr": "Port-channel5", "hostname": "10.160.4.50", "in_mbps": 0.07, "index": "5005", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.1, "speed": 2000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi41_Dedicated_VSwitch_10.160.4.41", "descr": "Port-channel7", "hostname": "10.160.4.50", "in_mbps": 0.09, "index": "5007", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.09, "speed": 2000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "To_Switch_10.160.4.1", "descr": "Port-channel8", "hostname": "10.160.4.50", "in_mbps": 2.12, "index": "5008", "ip": "10.160.4.50", "oper": "up", "out_mbps": 2.06, "speed": 2000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.11}, {"admin": "up", "alias": "", "descr": "StackPort1", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "5179", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "StackSub-St1-1", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "5180", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "", "descr": "StackSub-St1-2", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "5181", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 0, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0}, {"admin": "up", "alias": "ESXi41_Distributed_VSwitch", "descr": "GigabitEthernet1/0/1", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10101", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.05, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi41_Dedicated_VSwitch_10.160.4.41", "descr": "GigabitEthernet1/0/2", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10102", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.08, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi41_Dedicated_VSwitch_10.160.4.41", "descr": "GigabitEthernet1/0/3", "hostname": "10.160.4.50", "in_mbps": 0.09, "index": "10103", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.01, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi42_Distributed_VSwitch", "descr": "GigabitEthernet1/0/4", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10104", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.05, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi42_Dedicated_VSwitch_10.160.4.42", "descr": "GigabitEthernet1/0/5", "hostname": "10.160.4.50", "in_mbps": 1.81, "index": "10105", "ip": "10.160.4.50", "oper": "up", "out_mbps": 1.67, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.18}, {"admin": "up", "alias": "ESXi42_Dedicated_VSwitch_10.160.4.42", "descr": "GigabitEthernet1/0/6", "hostname": "10.160.4.50", "in_mbps": 0.03, "index": "10106", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.04, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi46_Distributed_VSwitch", "descr": "GigabitEthernet1/0/7", "hostname": "10.160.4.50", "in_mbps": 0.02, "index": "10107", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.05, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi46_Dedicated_VSwitch_10.160.4.46", "descr": "GigabitEthernet1/0/8", "hostname": "10.160.4.50", "in_mbps": 0.01, "index": "10108", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.07, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi46_Dedicated_VSwitch_10.160.4.46", "descr": "GigabitEthernet1/0/9", "hostname": "10.160.4.50", "in_mbps": 0.04, "index": "10109", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.02, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi44_Distributed_VSwitch", "descr": "GigabitEthernet1/0/10", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10110", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/11", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10111", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi44_Dedicated_VSwitch_10.160.4.44", "descr": "GigabitEthernet1/0/12", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10112", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/13", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10113", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/14", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10114", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi44_Dedicated_VSwitch_10.160.4.44", "descr": "GigabitEthernet1/0/15", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10115", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi45_Distributed_VSwitch", "descr": "GigabitEthernet1/0/16", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10116", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.07, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi45_Dedicated_VSwitch_10.160.4.45", "descr": "GigabitEthernet1/0/17", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10117", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.06, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi45_Dedicated_VSwitch_10.160.4.45", "descr": "GigabitEthernet1/0/18", "hostname": "10.160.4.50", "in_mbps": 0.06, "index": "10118", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.02, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/19", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10119", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "ESXi43_Distributed_VSwitch", "descr": "GigabitEthernet1/0/20", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10120", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.05, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi43_Dedicated_VSwitch_10.160.4.43", "descr": "GigabitEthernet1/0/21", "hostname": "10.160.4.50", "in_mbps": 0.1, "index": "10121", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.08, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "ESXi43_Dedicated_VSwitch_10.160.4.43", "descr": "GigabitEthernet1/0/22", "hostname": "10.160.4.50", "in_mbps": 0.03, "index": "10122", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.02, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "To_Switch_10.160.4.1", "descr": "GigabitEthernet1/0/23", "hostname": "10.160.4.50", "in_mbps": 0.14, "index": "10123", "ip": "10.160.4.50", "oper": "up", "out_mbps": 1.78, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.18}, {"admin": "up", "alias": "To_Switch_10.160.4.1", "descr": "GigabitEthernet1/0/24", "hostname": "10.160.4.50", "in_mbps": 1.67, "index": "10124", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.21, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.17}, {"admin": "up", "alias": "Maestro1_uplink", "descr": "GigabitEthernet1/0/25", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10125", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.05, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "Maestro2_uplink", "descr": "GigabitEthernet1/0/26", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10126", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.05, "speed": 1000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.01}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/27", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10127", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "GigabitEthernet1/0/28", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "10128", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 10, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "Null0", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "14001", "ip": "10.160.4.50", "oper": "up", "out_mbps": 0.0, "speed": 10000, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}, {"admin": "up", "alias": "", "descr": "FastEthernet0", "hostname": "10.160.4.50", "in_mbps": 0.0, "index": "14002", "ip": "10.160.4.50", "oper": "down", "out_mbps": 0.0, "speed": 100, "switch_ip": "10.160.4.50", "target_type": "cisco", "util": 0.0}], "ip": "10.160.4.50", "last_seen": "2026-06-19T16:41:53.229139", "status": "offline", "sys_contact": "", "sys_descr": null, "sys_location": "", "sys_name": null, "sys_uptime": null, "target_type": "cisco"}};
+const deviceData = {};
+
+const colorPalette = [
+    '#3b82f6', '#a78bfa', '#14b8a6', '#f59e0b', '#ef4444',
+    '#10b981', '#ec4899', '#6366f1', '#84cc16', '#06b6d4'
+];
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return text.toString()
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function filterDevices(shouldSelectDefaults) {
+    const search = document.getElementById('device_search').value.toLowerCase();
+    const deviceFilter = document.getElementById('device_type_filter').value;
+    const newlyVisibleIPs = new Set();
+
+    document.querySelectorAll('.device-row').forEach(row => {
+        const ip = row.getAttribute('data-ip');
+        const hostname = row.getAttribute('data-hostname').toLowerCase();
+        const targetType = row.getAttribute('data-target-type');
+        
+        const searchText = hostname + ' ' + ip;
+        const searchMatch = searchText.includes(search);
+
+        let typeMatch = false;
+        if (deviceFilter === 'all') {
+            typeMatch = true;
+        } else if (deviceFilter === 'cisco') {
+            typeMatch = targetType === 'cisco';
+        } else if (deviceFilter === 'esxi') {
+            typeMatch = targetType === 'esxi' || targetType === 'vmware';
+        } else if (deviceFilter === 'vcsa') {
+            typeMatch = targetType === 'vcsa';
+        }
+
+        if (searchMatch && typeMatch) {
+            row.style.setProperty('display', 'flex', 'important');
+            newlyVisibleIPs.add(ip);
+        } else {
+            row.style.setProperty('display', 'none', 'important');
+        }
+    });
+
+    const devicesToDeselect = selectedDevices.filter(ip => !newlyVisibleIPs.has(ip));
+    if (devicesToDeselect.length > 0) {
+        devicesToDeselect.forEach(ip => {
+            const idx = selectedDevices.indexOf(ip);
+            if (idx > -1) selectedDevices.splice(idx, 1);
+            const row = document.querySelector(`.device-row[data-ip="${ip}"]`);
+            const chk = document.getElementById(`chk_${ip}`);
+            if (row) row.classList.remove('active');
+            if (chk) chk.checked = false;
+        });
+    }
+
+    if (shouldSelectDefaults) {
+        // Deselect all first
+        [...selectedDevices].forEach(ip => toggleDevice(ip));
+        // Then select all newly visible ones
+        newlyVisibleIPs.forEach(ip => {
+            if (!selectedDevices.includes(ip)) {
+                toggleDevice(ip);
+            }
+        });
+    }
+
+    updateBadge();
+    if(selectedDevices.length === 0 && newlyVisibleIPs.size > 0 && !shouldSelectDefaults) {
+        // If user action (like search) results in 0 selections, select the first visible one
+        toggleDevice(newlyVisibleIPs.values().next().value);
+    } else if (selectedDevices.length > 0) {
+        loadChartData();
+    } else {
+        clearStats();
+        if(chart) chart.destroy();
+    }
+}
+
+function updateBadge() {
+    const visibleRows = Array.from(document.querySelectorAll('.device-row')).filter(r => r.style.display !== 'none');
+    document.getElementById('device_count_badge').textContent = `${selectedDevices.length}/${visibleRows.length}`;
+}
+
+function toggleDevice(ip) {
+    const idx = selectedDevices.indexOf(ip);
+    const row = document.querySelector(`.device-row[data-ip="${ip}"]`);
+    const chk = document.getElementById(`chk_${ip}`);
+    
+    if (idx === -1) {
+        selectedDevices.push(ip);
+        row.classList.add('active');
+        if (chk) chk.checked = true;
+    } else {
+        selectedDevices.splice(idx, 1);
+        row.classList.remove('active');
+        if (chk) chk.checked = false;
+    }
+    
+    updateBadge();
+    loadChartData();
+}
+
+function loadChartData() {
+    const range = document.getElementById('time_range_filter').value;
+    if (selectedDevices.length === 0) {
+        if (chart) {
+            chart.destroy();
+            chart = null;
+        }
+        clearStats();
+        return;
+    }
+
+    const promises = selectedDevices.map(ip => 
+        fetch(`/api/device/${encodeURIComponent(ip)}/history?metric=cpu&hours=${range}`)
+            .then(r => r.json())
+            .then(res => {
+                deviceData[ip] = res.data || [];
+            })
+    );
+
+    Promise.all(promises).then(() => {
+        renderChart();
+        updateStats();
+        loadAlerts();
+    });
+}
+
+function clearStats() {
+    document.getElementById('stat_current').textContent = '--';
+    document.getElementById('stat_avg').textContent = '--';
+    document.getElementById('stat_max').textContent = '--';
+    document.getElementById('stat_min').textContent = '--';
+    document.getElementById('stat_p95').textContent = '--';
+    document.getElementById('stat_stddev').textContent = '--';
+    document.getElementById('focused_device_title').textContent = '';
+}
+
+function updateStats() {
+    const primaryIp = selectedDevices[0];
+    const data = deviceData[primaryIp] || [];
+    if (data.length === 0) {
+        clearStats();
+        return;
+    }
+
+    const values = data.map(d => d[1]);
+    const hostname = document.querySelector(`.device-row[data-ip="${primaryIp}"]`).getAttribute('data-hostname');
+    document.getElementById('focused_device_title').textContent = `Focused: ${hostname} (${primaryIp})`;
+
+    const cur = values[values.length - 1];
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    const maxVal = Math.max(...values);
+    const minVal = Math.min(...values);
+
+    const sorted = [...values].sort((a, b) => a - b);
+    const p95Idx = Math.floor(sorted.length * 0.95);
+    const p95 = sorted[p95Idx];
+
+    const variance = values.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / values.length;
+    const stddev = Math.sqrt(variance);
+
+    const el = document.getElementById('stat_current');
+    el.textContent = cur.toFixed(1) + '%';
+    el.className = 'text-2xl font-black ' + (cur >= 90 ? 'text-red-400' : cur >= 70 ? 'text-yellow-400' : 'text-green-400');
+
+    document.getElementById('stat_avg').textContent = avg.toFixed(1) + '%';
+    document.getElementById('stat_max').textContent = maxVal.toFixed(1) + '%';
+    document.getElementById('stat_min').textContent = minVal.toFixed(1) + '%';
+    document.getElementById('stat_p95').textContent = p95.toFixed(1) + '%';
+    document.getElementById('stat_stddev').textContent = stddev.toFixed(1) + '%';
+}
+
+function loadAlerts() {
+    const list = document.getElementById('alert_list');
+    const primaryIp = selectedDevices[0];
+    if (!primaryIp) {
+        list.innerHTML = '<p class="text-sm text-slate-300 italic">Select a target device to scan anomaly logs.</p>';
+        return;
+    }
+
+    fetch(`/api/alerts?ip=${encodeURIComponent(primaryIp)}&limit=20`)
+        .then(r => r.json())
+        .then(data => {
+            const alerts = (data.alerts || []).filter(a => a.alert_type && a.alert_type.startsWith('cpu'));
+            if (alerts.length === 0) {
+                list.innerHTML = '<p class="text-sm text-slate-300 italic">No anomalies detected in the current window.</p>';
+                return;
+            }
+            list.innerHTML = alerts.map(a =>
+                `<div class="text-xs p-3 rounded-xl ${a.severity === 'critical' ? 'bg-red-500/10 text-red-200 border border-red-500/20' : 'bg-yellow-500/10 text-yellow-200 border border-yellow-500/20'}">
+                    <span class="font-mono text-slate-300 font-bold mr-3">${escapeHtml(a.timestamp.substring(11, 19))}</span> ${escapeHtml(a.message)}
+                </div>`
+            ).join('');
+        });
+}
+
+function renderChart() {
+    if (chart) chart.destroy();
+
+    const range = parseInt(document.getElementById('time_range_filter').value);
+    const formatTime = (ts) => {
+        if (!ts) return '';
+        const s = String(ts);
+        if (s.length < 16) return s;
+        return (range > 12) ? s.substring(5, 16).replace('-', '/') : s.substring(11, 19);
+    };
+
+    const datasets = selectedDevices.map((ip, i) => {
+        const hostname = document.querySelector(`.device-row[data-ip="${ip}"]`).getAttribute('data-hostname');
+        const data = deviceData[ip] || [];
+        const color = colorPalette[i % colorPalette.length];
+        return {
+            label: hostname,
+            data: data.map(d => ({ x: formatTime(d[0]), y: d[1] })),
+            borderColor: color,
+            backgroundColor: color + '15',
+            fill: selectedDevices.length === 1,
+            tension: 0.4,
+            pointRadius: 0,
+            borderWidth: 2.5
+        };
+    });
+
+    let labels = [];
+    if (selectedDevices.length > 0) {
+        const primaryIp = selectedDevices[0];
+        labels = (deviceData[primaryIp] || []).map(d => formatTime(d[0]));
+    }
+
+    const ctx = document.getElementById('cpu_chart').getContext('2d');
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+                x: { ticks: { color: '#94a3b8', maxTicksLimit: 12, font: { size: 10, weight: 'bold' } }, grid: { color: 'rgba(71,85,105,0.2)' } },
+                y: { min: 0, max: 100, ticks: { color: '#94a3b8', font: { size: 10, weight: 'bold' } }, grid: { color: 'rgba(71,85,105,0.2)' } }
+            },
+            plugins: {
+                legend: { position: 'top', labels: { color: '#f1f5f9', font: { size: 11, weight: 'bold' } } }
+            }
+        }
+    });
+}
+
+function exportCSV() {
+    if (selectedDevices.length === 0) {
+        alert('Select at least one device');
+        return;
+    }
+    let csv = 'Timestamp,Device,CPU %\\n';
+    selectedDevices.forEach(ip => {
+        const hostname = document.querySelector(`.device-row[data-ip="${ip}"]`).getAttribute('data-hostname');
+        const data = deviceData[ip] || [];
+        data.forEach(d => {
+            csv += `${d[0]},${hostname},${d[1]}
+`;
+        });
+    });
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cpu_analytics_${document.getElementById('time_range_filter').value}h.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function loadPreferences() {
+    const savedType = localStorage.getItem('device_type_filter');
+    if (savedType) {
+        document.getElementById('device_type_filter').value = savedType;
+    } else {
+        document.getElementById('device_type_filter').value = 'cisco';
+        localStorage.setItem('device_type_filter', 'cisco');
+    }
+
+    const savedRange = localStorage.getItem('time_range_filter');
+    if (savedRange) {
+        document.getElementById('time_range_filter').value = savedRange;
+    } else {
+        document.getElementById('time_range_filter').value = '24';
+        localStorage.setItem('time_range_filter', '24');
+    }
+}
+
+function savePreferences() {
+    localStorage.setItem('device_type_filter', document.getElementById('device_type_filter').value);
+    localStorage.setItem('time_range_filter', document.getElementById('time_range_filter').value);
+}
+
+document.getElementById('device_type_filter').addEventListener('change', () => {
+    savePreferences();
+    filterDevices(true); // When user changes filter, re-select all new visible devices
+});
+
+document.getElementById('time_range_filter').addEventListener('change', () => {
+    savePreferences();
+    loadChartData();
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadPreferences();
+    filterDevices(true); // Initial load with default selection
+});
+</script>
+
+    </main>
+
+    <div id="details_panel" role="dialog" aria-modal="true" aria-label="Device details">
+        <button class="close-btn text-3xl" onclick="closeDetails()" aria-label="Close details panel">&times;</button>
+        <div id="details_content"></div>
+    </div>
+
+    <script>
+        function toggleMobileNav() {
+            const overlay = document.getElementById('mobile_nav_overlay');
+            const drawer = document.getElementById('mobile_nav_drawer');
+            const isOpen = drawer.classList.contains('open');
+            if (isOpen) {
+                overlay.classList.remove('open');
+                drawer.classList.remove('open');
+            } else {
+                overlay.classList.add('open');
+                drawer.classList.add('open');
+                drawer.querySelector('a.active')?.focus() || drawer.querySelector('a').focus();
+            }
+        }
+
+        socket.on('connect', () => {
+            const el = document.getElementById('ws_status');
+            if (el) el.innerHTML = '<span class="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse shadow-[0_0_10px_#22c55e]"></span> Live';
+        });
+        socket.on('disconnect', () => {
+            const el = document.getElementById('ws_status');
+            if (el) el.innerHTML = '<span class="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_10px_#ef4444]"></span> Offline';
+        });
+
+        let _lastFocusedElement = null;
+
+        function showDetails(ip) {
+            _lastFocusedElement = document.activeElement;
+            const panel = document.getElementById('details_panel');
+            const content = document.getElementById('details_content');
+            content.innerHTML = '<div class="flex items-center justify-center h-64"><i class="fas fa-circle-notch fa-spin text-4xl text-accent"></i></div>';
+            panel.classList.add('open');
+
+            fetch(`/api/device/${encodeURIComponent(ip)}/details`)
+                .then(r => r.json())
+                .then(data => {
+                    const d = data.device;
+                    if (!d || Object.keys(d).length === 0) {
+                        content.innerHTML = `
+                            <h2 class="text-xl font-bold mb-1 text-white">Device Not Found</h2>
+                            <p class="text-accent-glow font-mono text-base mb-6">${escapeHtml(ip)}</p>
+                            <p class="text-slate-300">Basic telemetry for this target is currently unavailable.</p>
+                        `;
+                        return;
+                    }
+                    content.innerHTML = `
+                        <h2 id="details_heading" class="text-xl font-bold mb-1 text-white">${escapeHtml(d.hostname || d.ip)}</h2>
+                        <p class="text-accent-glow font-mono text-base mb-8">${escapeHtml(d.ip)}</p>
+                        
+                        <div class="space-y-8">
+                            <section>
+                                <h3 class="text-xs font-bold uppercase text-slate-400 mb-3 tracking-widest">System Specification</h3>
+                                <div class="bg-surface-900 p-4 rounded-xl border border-surface-700 shadow-inner">
+                                    <p class="text-sm text-slate-200"><span class="text-slate-500 font-medium">Model:</span> ${escapeHtml(d.sys_descr ? d.sys_descr.split(',')[0] : 'N/A')}</p>
+                                    <p class="text-sm text-slate-200 mt-2"><span class="text-slate-500 font-medium">Uptime:</span> ${escapeHtml(d.sys_uptime || 'N/A')}</p>
+                                </div>
+                            </section>
+
+                            <section>
+                                <h3 class="text-xs font-bold uppercase text-slate-400 mb-3 tracking-widest">Telemetry Overview</h3>
+                                <div class="grid grid-cols-2 gap-4">
+                                    ${(d.target_type === 'cisco' || !d.target_type) ? `
+                                    <div class="bg-surface-900 p-4 rounded-xl border border-surface-700 shadow-inner">
+                                        <p class="text-xs text-slate-500 font-bold mb-1">CPU Load</p>
+                                        <p class="text-2xl font-black text-white">${d.cpu || 0}%</p>
+                                    </div>
+                                    ` : `
+                                    <div class="bg-surface-900 p-4 rounded-xl border border-surface-700 shadow-inner">
+                                        <p class="text-xs text-slate-500 font-bold mb-1">Platform</p>
+                                        <p class="text-sm font-black ${d.target_type === 'vcsa' ? 'text-purple-300' : 'text-green-300'}">${d.target_type === 'vcsa' ? 'VMware VCSA' : 'VMware ESXi'}</p>
+                                    </div>
+                                    `}
+                                    <div class="bg-surface-900 p-4 rounded-xl border border-surface-700 shadow-inner">
+                                        <p class="text-xs text-slate-500 font-bold mb-1">Network Status</p>
+                                        <p class="text-2xl font-black ${d.status === 'online' ? 'text-green-400' : 'text-red-400'}">${escapeHtml(d.status ? d.status.toUpperCase() : 'UNKNOWN')}</p>
+                                    </div>
+                                </div>
+                                ${(d.target_type === 'esxi' || d.target_type === 'vmware' || d.target_type === 'vcsa') ? `
+                                <p class="text-xs text-slate-500 mt-3 italic opacity-75">Notice: Real-time CPU/Memory metrics are unavailable for VMware vSphere via standard SNMP MIBs.</p>
+                                ` : ''}
+                            </section>
+
+                            <section>
+                                <h3 class="text-xs font-bold uppercase text-slate-400 mb-3 tracking-widest">Operational Alerts</h3>
+                                <div class="space-y-3">
+                                    ${data.alerts && data.alerts.length ? data.alerts.map(a => `
+                                        <div class="p-4 bg-red-500/10 border border-red-500/20 rounded-xl">
+                                            <p class="font-black text-red-400 text-xs tracking-wider uppercase">${escapeHtml(a.severity ? a.severity.toUpperCase() : '')}</p>
+                                            <p class="text-slate-200 mt-1.5 text-sm leading-relaxed">${escapeHtml(a.message)}</p>
+                                            <p class="text-slate-500 mt-2 text-[11px] font-mono">${escapeHtml(a.timestamp ? a.timestamp.replace('T', ' ').substring(0,19) : '')}</p>
+                                        </div>
+                                    `).join('') : '<div class="p-8 text-center border-2 border-dashed border-surface-700 rounded-xl text-slate-500 text-sm">No active alerts recorded.</div>'}
+                                </div>
+                            </section>
+                        </div>
+                    `;
+                    panel.querySelector('.close-btn').focus();
+                });
+        }
+
+        function closeDetails() {
+            const panel = document.getElementById('details_panel');
+            panel.classList.remove('open');
+            if (_lastFocusedElement) {
+                _lastFocusedElement.focus();
+                _lastFocusedElement = null;
+            }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const panel = document.getElementById('details_panel');
+                if (panel && panel.classList.contains('open')) closeDetails();
+                const drawer = document.getElementById('mobile_nav_drawer');
+                if (drawer && drawer.classList.contains('open')) toggleMobileNav();
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            const panel = document.getElementById('details_panel');
+            if (!panel || !panel.classList.contains('open')) return;
+            if (e.key !== 'Tab') return;
+            const focusable = panel.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+            if (focusable.length === 0) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (e.shiftKey) {
+                if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+            } else {
+                if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+            }
+        });
+    </script>
+</body>
+</html>
+>
+</body>
+</html>

@@ -17,6 +17,7 @@ import json
 import logging
 import sqlite3
 import re
+import time
 from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 
@@ -226,13 +227,56 @@ def config_history():
 @app.route('/devices', methods=['GET'])
 def devices_page():
     latest_config = load_config()
-    return render_template('devices.html', devices=latest_config.get('monitored_switches', []))
+    # Build detected hostname + status map from DB
+    all_devices = db.get_devices()
+    detected_hostnames = {}
+    device_status = {}
+    for d in all_devices:
+        ip = d.get('ip', '')
+        detected_hostnames[ip] = d.get('hostname') or ''
+        device_status[ip] = {
+            'status': d.get('status', 'unknown'),
+            'last_seen': d.get('last_seen', ''),
+            'sys_descr': d.get('sys_descr', '')
+        }
+    return render_template('devices.html',
+                           devices=latest_config.get('monitored_switches', []),
+                           detected_hostnames=detected_hostnames,
+                           device_status=device_status)
 
 @app.route('/api/devices', methods=['POST'])
 def save_device():
     data = request.json
     if not data or not data.get('ip'):
         return jsonify({'status': 'error', 'message': 'Invalid data'}), 400
+    
+    # ── Smart type auto-correction ──
+    # If the device is already in the DB, check its detected sys_descr/hostname
+    # against the user-selected target_type and correct if clearly wrong.
+    ip = data['ip']
+    db_devices = db.get_devices()
+    db_match = next((d for d in db_devices if d.get('ip') == ip), None)
+    corrected_type = None
+    if db_match:
+        sys_descr = (db_match.get('sys_descr') or '').lower()
+        hostname = (db_match.get('hostname') or '').lower()
+        selected_type = data.get('target_type', 'cisco')
+        
+        # Detect VMware ESXi
+        if 'vmware' in sys_descr or 'esxi' in sys_descr or 'esxi' in hostname:
+            if selected_type == 'cisco':
+                data['target_type'] = 'esxi'
+                corrected_type = 'esxi'
+        # Detect VMware VCSA / vCenter / Virtual Center
+        elif 'vcenter' in sys_descr or 'vcenter' in hostname or 'virtualcenter' in sys_descr or 'vcsa' in hostname:
+            if selected_type != 'vcsa':
+                data['target_type'] = 'vcsa'
+                corrected_type = 'vcsa'
+        # Detect Cisco IOS / NX-OS / Catalyst
+        elif 'cisco' in sys_descr or 'ios' in sys_descr or 'nx-os' in sys_descr or 'catalyst' in sys_descr:
+            if selected_type in ('esxi', 'vcsa', 'vmware'):
+                data['target_type'] = 'cisco'
+                corrected_type = 'cisco'
     
     current_config = load_config()
     devices = current_config.get('monitored_switches', [])
@@ -253,7 +297,11 @@ def save_device():
     current_config['monitored_switches'] = devices
     
     if write_config_safely(current_config):
-        return jsonify({'status': 'ok'})
+        resp = {'status': 'ok'}
+        if corrected_type:
+            resp['corrected_type'] = corrected_type
+            resp['original_type'] = selected_type if 'selected_type' in dir() else ''
+        return jsonify(resp)
     else:
         return jsonify({'status': 'error', 'message': 'Failed to save configuration file'}), 500
 
@@ -270,6 +318,12 @@ def delete_device(ip):
     current_config['monitored_switches'] = devices
     
     if write_config_safely(current_config):
+        # Purge all historical data from the database so the device
+        # never appears on any screen after removal.
+        try:
+            db.purge_device(ip)
+        except Exception as e:
+            logger.error(f"Failed to purge device {ip} from DB: {e}")
         return jsonify({'status': 'ok'})
     else:
         return jsonify({'status': 'error', 'message': 'Failed to save configuration file'}), 500
@@ -285,10 +339,40 @@ def api_alerts():
     limit = int(request.args.get('limit', 50))
     return jsonify({'alerts': db.get_alerts(ip, limit=limit)})
 
+@app.route('/api/suppressions', methods=['GET', 'POST', 'DELETE'])
+def api_suppressions():
+    if request.method == 'GET':
+        return jsonify(db.get_suppressions())
+    elif request.method == 'POST':
+        data = request.json
+        db.add_suppression(data['id'], data.get('family', ''), data.get('ip', ''))
+        return jsonify({'status': 'ok'})
+    elif request.method == 'DELETE':
+        id = request.args.get('id')
+        db.remove_suppression(id)
+        return jsonify({'status': 'ok'})
+
 # ... (Other API endpoints)
 @app.route('/api/topology')
 def api_topology():
-    return jsonify({ 'links': db.get_topology(), 'devices': list(db.get_devices()), 'port_channels': db.get_port_channels() })
+    cfg = load_config()
+    type_map = {d['ip']: d.get('target_type', 'cisco') for d in cfg.get('monitored_switches', [])}
+    devices = list(db.get_devices())
+    for d in devices:
+        d['target_type'] = type_map.get(d.get('ip'), 'cisco')
+    return jsonify({ 'links': db.get_topology(), 'devices': devices, 'port_channels': db.get_port_channels() })
+
+@app.route('/api/device/<ip>/config')
+def api_device_config(ip):
+    config_type = request.args.get('type', 'running')
+    history = db.get_config_history(ip, limit=20, config_type=config_type)
+    return jsonify({'history': history})
+
+@app.route('/api/device/<ip>/config/pull', methods=['POST'])
+def api_device_config_pull(ip):
+    # Config pulling via SNMP SET / TFTP is not yet implemented.
+    # Return a clear error so the UI button shows meaningful feedback.
+    return jsonify({'status': 'error', 'error': 'Live config extraction is not yet implemented. Configure SNMP config polling on the device first.'}), 501
 
 @app.route('/api/device/<ip>/history')
 def api_device_history(ip):
@@ -303,8 +387,200 @@ def api_device_history(ip):
     
 # --- Diagnostics ---
 def run_diagnostics(devices):
-    # This is a placeholder for the full diagnostics logic
-    return []
+    """Analyze device and interface data for real issues."""
+    issues = []
+    current_config = load_config()
+    type_map = {d['ip']: d.get('target_type', 'cisco') for d in current_config.get('monitored_switches', [])}
+
+    for ip, dev in devices.items():
+        target_type = type_map.get(ip, dev.get('target_type', 'cisco'))
+        hostname = dev.get('hostname', ip)
+        status = dev.get('status', 'unknown')
+        is_vmware = target_type in ('vmware', 'esxi', 'vcsa')
+
+        # --- Offline device ---
+        if status != 'online':
+            issues.append({
+                'title': 'Device Unreachable',
+                'severity_label': 'CRITICAL',
+                'severity_class': 'bg-red-500/10 border border-red-500/20 text-red-400',
+                'data_severity': 'critical',
+                'is_global': False,
+                'target_type': target_type,
+                'hostname': hostname,
+                'target_device_info': f"{hostname}\nIP: {ip}\nStatus: {status.upper()}\nSNMP: No Response",
+                'why_problem': 'The device is not responding to SNMP polling. This may indicate a network outage, power failure, or SNMP service failure.',
+                'simple_terms': 'This device has gone dark — we cannot reach it for monitoring.',
+                'solution': 'Check physical connectivity, power, and SNMP service status on the device.',
+                'connection_type': 'SNMP UDP 161',
+                'remediation_title': 'Verify Connectivity',
+                'issue_family': 'unreachable',
+                'remediation_id': f'fix_ping_{ip}',
+                'remediation_script': f'ping {ip}\n# If ping fails, check physical link and power.\n# If ping works but SNMP fails, check SNMP config:\n# show snmp community   (Cisco)\n# esxcli system snmp get   (ESXi)'
+            })
+            continue  # Skip further checks for offline devices
+
+        # --- High CPU ---
+        cpu = dev.get('cpu')
+        if cpu is not None and float(cpu) > 70:
+            issues.append({
+                'title': 'High CPU Utilization',
+                'severity_label': 'HIGH',
+                'severity_class': 'bg-orange-500/10 border border-orange-500/20 text-orange-400',
+                'data_severity': 'high',
+                'is_global': False,
+                'target_type': target_type,
+                'hostname': hostname,
+                'target_device_info': f"{hostname}\nIP: {ip}\nCPU: {cpu}%\nThreshold: >70%",
+                'why_problem': 'Sustained high CPU can cause packet drops, slow SNMP responses, and protocol instability (STP, routing reconvergence).',
+                'simple_terms': 'The device brain is overloaded — packets and management may be delayed.',
+                'solution': 'Identify the CPU-consuming process and reduce load, or consider upgrading hardware.',
+                'connection_type': 'SNMP hrProcessorTable / ciscoProcessMIB',
+                'remediation_title': 'Investigate CPU Usage',
+                'issue_family': 'high_cpu',
+                'remediation_id': f'fix_cpu_{ip}',
+                'remediation_script': f'\n# Cisco: show processes cpu sorted\n# ESXi: esxtop -b -d 2 -n 5 | findstr CPU\n# VMware VCSA: Check vCenter service status via VAMI (https://{ip}:5480)\n# SNMP verify: snmpwalk -v2c -c <community> {ip} 1.3.6.1.4.1.9.9.109.1.1.1.1.3' if not is_vmware else f'\n# ESXi: esxtop -b -d 2 -n 5\n# Check VM resource contention\n# SNMP verify: snmpwalk -v2c -c <community> {ip} 1.3.6.1.2.1.25.3.3.1.2'
+            })
+
+        # --- Interface checks (Cisco only — vmware virtual switch state isn't actionable the same way) ---
+        if not is_vmware:
+            for iface in dev.get('interfaces', []):
+                if_descr = iface.get('descr', '')
+                if_alias = iface.get('alias', '')
+                admin = iface.get('admin', 'up')
+                oper = iface.get('oper', 'up')
+                in_err = iface.get('in_errors', 0) or 0
+                out_err = iface.get('out_errors', 0) or 0
+                speed = iface.get('speed', 0) or 0
+                descr_lower = if_descr.lower()
+
+                # Skip stack, vlan, loopback, null for down-state checks (they're often intentionally down)
+                is_logical = any(x in descr_lower for x in ['stacksub', 'stackport', 'loopback', 'null', 'vlan'])
+
+                # --- Admin up but Oper down (physical ports only) ---
+                if admin == 'up' and oper == 'down' and not is_logical:
+                    port_label = if_alias or if_descr
+                    issues.append({
+                        'title': 'Interface Down (Admin Up / Oper Down)',
+                        'severity_label': 'MEDIUM',
+                        'severity_class': 'bg-yellow-500/10 border border-yellow-500/20 text-yellow-400',
+                        'data_severity': 'medium',
+                        'is_global': False,
+                        'target_type': target_type,
+                        'hostname': hostname,
+                        'target_device_info': f"{hostname}\nIP: {ip}\nPort: {if_descr}\nAlias: {if_alias or '—'}\nAdmin: UP / Oper: DOWN",
+                        'why_problem': 'The interface is administratively enabled but the line protocol is down. This usually means a cable, SFP, or far-end issue.',
+                        'simple_terms': 'The port is turned on but nothing is on the other end of the wire (or the wire is broken).',
+                        'solution': 'Check the physical cable, SFP transceiver, and the connected device. If the port is intentionally unused, consider setting it to admin down.',
+                        'connection_type': 'SNMP ifOperStatus',
+                        'remediation_title': 'Investigate or Disable Port',
+                        'issue_family': 'interface_down',
+                        'remediation_id': f'fix_ifdown_{ip}_{iface.get("index", if_descr)}',
+                        'remediation_script': f'\n# Check the connected device and cable\nshow interface {if_descr}\nshow run interface {if_descr}\n# If intentionally unused, disable it:\nconf t\ninterface {if_descr}\nshutdown\nend\nwr mem'
+                    })
+
+                # --- Speed mismatch (1Gbps SFP in 10Gbps label) ---
+                if speed > 0 and speed < 1000 and ('gigabit' in descr_lower or descr_lower.startswith('gi') or descr_lower.startswith('te')):
+                    issues.append({
+                        'title': 'Speed Mismatch (1Gbps on 10Gbps Port)',
+                        'severity_label': 'CRITICAL',
+                        'severity_class': 'bg-red-500/10 border border-red-500/20 text-red-400',
+                        'data_severity': 'critical',
+                        'is_global': False,
+                        'target_type': target_type,
+                        'hostname': hostname,
+                        'target_device_info': f"{hostname}\nIP: {ip}\nPort: {if_descr}\nNegotiated Speed: {speed}Mbps\nExpected: ≥1000Mbps",
+                        'why_problem': 'The interface is negotiating at sub-gigabit speed despite being a gigabit or higher port. May indicate a bad cable, SFP, or duplex mismatch.',
+                        'simple_terms': 'A fast port is running slow — likely a cable or SFP issue.',
+                        'solution': 'Check cable quality, SFP module, and speed/duplex negotiation settings.',
+                        'connection_type': 'SNMP ifSpeed',
+                        'remediation_title': 'Check Speed Negotiation',
+                        'issue_family': 'speed_mismatch',
+                        'remediation_id': f'fix_speed_{ip}_{iface.get("index", if_descr)}',
+                        'remediation_script': f'\nshow interface {if_descr}\n# Verify speed and duplex\nshow run interface {if_descr}\n# If hard-set, try auto-negotiate:\nconf t\ninterface {if_descr}\nspeed auto\nduplex auto\nend\nwr mem'
+                    })
+
+                # --- Interface errors (CRC, runts, giants, etc.) ---
+                if in_err > 100 or out_err > 100:
+                    issues.append({
+                        'title': 'Interface Input/Output Errors',
+                        'severity_label': 'HIGH',
+                        'severity_class': 'bg-orange-500/10 border border-orange-500/20 text-orange-400',
+                        'data_severity': 'high',
+                        'is_global': False,
+                        'target_type': target_type,
+                        'hostname': hostname,
+                        'target_device_info': f"{hostname}\nIP: {ip}\nPort: {if_descr}\nInput Errors: {in_err}\nOutput Errors: {out_err}",
+                        'why_problem': 'Interface errors indicate physical layer problems — CRC errors, runts, giants, or collision. Usually caused by bad cabling, SFP, or electromagnetic interference.',
+                        'simple_terms': 'The port is receiving or sending corrupted data — likely a bad cable.',
+                        'solution': 'Replace the cable or SFP, check for EMI, and verify duplex settings.',
+                        'connection_type': 'SNMP ifInErrors / ifOutErrors',
+                        'remediation_title': 'Investigate Physical Layer',
+                        'issue_family': 'interface_errors',
+                        'remediation_id': f'fix_err_{ip}_{iface.get("index", if_descr)}',
+                        'remediation_script': f'\nshow interface {if_descr}\n# Look for: CRC, runts, giants, input/output errors\n# Try: clear counters {if_descr}\n# Monitor for new errors after clearing.\n# If errors reappear, replace cable/SFP.'
+                    })
+
+        # --- High utilization (>90%) ---
+        for iface in dev.get('interfaces', []):
+            util = iface.get('util', 0) or 0
+            if util > 90:
+                if_descr = iface.get('descr', '')
+                issues.append({
+                    'title': 'Interface Near Capacity (>90% Utilization)',
+                    'severity_label': 'HIGH',
+                    'severity_class': 'bg-orange-500/10 border border-orange-500/20 text-orange-400',
+                    'data_severity': 'high',
+                    'is_global': False,
+                    'target_type': target_type,
+                    'hostname': hostname,
+                    'target_device_info': f"{hostname}\nIP: {ip}\nPort: {if_descr}\nUtilization: {util}%\nIn: {iface.get('in_mbps', 0)} Mbps / Out: {iface.get('out_mbps', 0)} Mbps",
+                    'why_problem': 'This interface is saturated. Traffic above 90% utilization will cause queuing delays, jitter, and packet loss.',
+                    'simple_terms': 'This pipe is almost full — traffic is backing up.',
+                    'solution': 'Consider load balancing, QoS prioritization, link aggregation, or upgrading the link capacity.',
+                    'connection_type': 'SNMP ifHCInOctets / ifHCOutOctets',
+                    'remediation_title': 'Reduce Traffic or Upgrade Link',
+                    'issue_family': 'high_utilization',
+                    'remediation_id': f'fix_util_{ip}_{iface.get("index", if_descr)}',
+                    'remediation_script': f'\nshow interface {if_descr}\n# Check top talkers:\nshow interface {if_descr} stats\n# Consider QoS or adding a Port-channel member'
+                })
+
+    # --- Global: SNMP community check ---
+    snmp_comm = current_config.get('snmp', {}).get('community', 'public')
+    if snmp_comm.lower() == 'public':
+        issues.append({
+            'title': 'Default SNMP Community String',
+            'severity_label': 'HIGH',
+            'severity_class': 'bg-yellow-500/10 border border-yellow-500/20 text-yellow-400',
+            'data_severity': 'high',
+            'is_global': True,
+            'target_type': 'cisco',
+            'hostname': 'All Devices',
+            'target_device_info': 'All monitored devices\nCommunity: public\nRisk: Cleartext, well-known string',
+            'why_problem': 'Using the default "public" community string allows anyone on the network to read device configuration, serial numbers, and topology data via SNMP.',
+            'simple_terms': 'Your devices passwords are the factory default — anyone can read them.',
+            'solution': 'Change to a strong community string and migrate to SNMPv3 where possible.',
+            'connection_type': 'Global config',
+            'remediation_title': 'Change SNMP Community',
+            'issue_family': 'snmp_community',
+            'remediation_id': 'fix_snmp_comm_global',
+            'remediation_script': '\n# Cisco IOS:\nconf t\nno snmp-server community public RO\nsnmp-server community <STRONG_STRING> RO\nend\nwr mem\n\n# Better — use SNMPv3:\nconf t\nsnmp-server view V3 iso included\nsnmp-server group V3GRP v3 priv read V3\nsnmp-server user V3USER V3GRP v3 auth sha <AUTH_KEY> priv aes 128 <PRIV_KEY>\nend\nwr mem'
+        })
+
+    suppressions = db.get_suppressions()
+    suppression_map = { s['remediation_id']: s for s in suppressions }
+    family_suppressions = { s['issue_type'] for s in suppressions if s['remediation_id'].startswith('family:') }
+
+    for issue in issues:
+        is_suppressed = False
+        if issue['remediation_id'] in suppression_map:
+            is_suppressed = True
+        elif f"family:{issue.get('issue_family', '')}" in family_suppressions:
+            is_suppressed = True
+        
+        issue['is_suppressed'] = is_suppressed
+
+    return issues
 
 # --- Background Task ---
 def background_loop():

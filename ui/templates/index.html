@@ -160,23 +160,20 @@
         const savedLimit = localStorage.getItem('leaderboard_limit');
         if (savedLimit) document.getElementById('leaderboard_limit').value = savedLimit;
         const savedFilter = localStorage.getItem('device_type_filter');
-        if (savedFilter) document.getElementById('device_type_filter').value = savedFilter;
+        if (savedFilter) {
+            document.getElementById('device_type_filter').value = savedFilter;
+        } else {
+            document.getElementById('device_type_filter').value = 'cisco';
+            localStorage.setItem('device_type_filter', 'cisco');
+        }
     }
 
     function filterByDeviceType(entries) {
         const filter = document.getElementById('device_type_filter').value;
         if (filter === 'all') return entries;
-        if (filter === 'cisco') return entries.filter(d => d.target_type !== 'vmware');
-        if (filter === 'esxi') return entries.filter(d => {
-            if (d.target_type !== 'vmware') return false;
-            const hn = (d.hostname || '').toLowerCase();
-            return !hn.includes('vcenter') && !hn.includes('appliance');
-        });
-        if (filter === 'vcsa') return entries.filter(d => {
-            if (d.target_type !== 'vmware') return false;
-            const hn = (d.hostname || '').toLowerCase();
-            return hn.includes('vcenter') || hn.includes('appliance');
-        });
+        if (filter === 'cisco') return entries.filter(d => d.target_type === 'cisco' || (!d.target_type));
+        if (filter === 'esxi') return entries.filter(d => d.target_type === 'esxi' || d.target_type === 'vmware');
+        if (filter === 'vcsa') return entries.filter(d => d.target_type === 'vcsa');
         return entries;
     }
 
@@ -246,18 +243,34 @@
                 const isMismatch = (d.speed > 0 && d.speed < 1000 && (descrSafe.toLowerCase().includes('gigabit') || descrSafe.toLowerCase().includes('gi')));
                 const switchIP = d.switch_ip || d.ip;
                 const deviceLabel = switchIP;
-                const shortDescr = shortenIfName(descrSafe || 'Unknown');
+                // For ESXi/VCSA: extract just the vSwitch/DSwitch name from verbose SNMP descriptions
+                let displayDescr = shortenIfName(descrSafe || 'Unknown');
+                if (d.target_type === 'esxi' || d.target_type === 'vcsa' || d.target_type === 'vmware') {
+                    // "Device vmnic0 at 03:00.0 qflge" → "vmnic0"
+                    const vmnicMatch = descrSafe.match(/Device\s+(vmnic\d+)/i);
+                    // "Link Aggregation Storage_Network on switch: Storage_Switch" → "Storage_Network (LAG)"
+                    const lagMatch = descrSafe.match(/Link Aggregation\s+(\S+)/i);
+                    // "Distributed Virtual VMware switch: DvsPortset-0" → "DvsPortset-0"
+                    const dvsMatch = descrSafe.match(/switch:\s*(.+)/i);
+                    // "Traditional Virtual VMware switch: Storage_Switch" → "Storage_Switch"
+                    const vssMatch = descrSafe.match(/Traditional.*switch:\s*(.+)/i);
+                    if (vmnicMatch) displayDescr = vmnicMatch[1];
+                    else if (lagMatch) displayDescr = lagMatch[1] + ' (LAG)';
+                    else if (dvsMatch) displayDescr = dvsMatch[1].trim();
+                    else if (vssMatch) displayDescr = vssMatch[1].trim();
+                    else if (d.alias) displayDescr = d.alias;
+                }
+                const shortDescr = displayDescr;
                 
                 const speed = d.speed || 0;
                 let speedLabel = speed + 'mb';
                 if (speed >= 1000) { speedLabel = (speed / 1000) + 'gb'; }
 
                 let targetType = 'switch';
-                if (d.target_type === 'vmware') {
-                    const hn = (d.hostname || '').toLowerCase();
-                    targetType = (hn.includes('vcenter') || hn.includes('appliance')) ? 'vcsa' : 'esxi';
-                } else if (d.target_type) {
-                    targetType = d.target_type;
+                if (d.target_type === 'vcsa') {
+                    targetType = 'vcsa';
+                } else if (d.target_type === 'esxi' || d.target_type === 'vmware') {
+                    targetType = 'esxi';
                 }
 
                 return `
@@ -274,7 +287,7 @@
                         <td class="px-3 py-1 font-mono text-white text-center border border-black text-xs" style="max-width:350px; white-space:normal; word-break:break-word; vertical-align:middle;">
                             <div style="display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;">${escapeHtml(shortDescr)}</div>
                         </td>
-                        <td class="px-3 py-1 text-slate-300 text-center border border-black text-xs" style="min-width: 120px; max-width: 300px; white-space:normal; word-break:break-word; line-height:1.5;">${d.target_type === 'vmware' ? '' : escapeHtml(d.alias || '—')}</td>
+                        <td class="px-3 py-1 text-slate-300 text-center border border-black text-xs" style="min-width: 120px; max-width: 300px; white-space:normal; word-break:break-word; line-height:1.5;">${(d.target_type === 'esxi' || d.target_type === 'vcsa' || d.target_type === 'vmware') ? escapeHtml(d.alias || '—') : escapeHtml(d.alias || '—')}</td>
                         <td class="px-3 py-1 text-center font-mono border border-black text-xs ${isMismatch ? 'text-red-400 font-bold' : 'text-slate-200'}" style="width: 100px; min-width: 100px; max-width: 100px;">${speedLabel}</td>
                         <td class="px-2 py-1 text-center font-mono border border-black text-xs" style="width: 100px; min-width: 100px; max-width: 100px;">
                             <div class="flex items-center justify-center gap-2">
